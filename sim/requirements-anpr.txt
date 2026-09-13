@@ -1,0 +1,5 @@
+# Dependensi ANPR (pengganti RFID). Install: pip install -r sim/requirements-anpr.txt
+opencv-python-headless
+numpy
+paddlepaddle
+paddleocr==2.8.1

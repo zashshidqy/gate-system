@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+gate_dual_gui.py — All-in-One: 2 unit gerbang (ENTRY & EXIT) dalam SATU window.
+
+Satu jendela Tk, dua kartu panel berdampingan:
+  • Kiri  = Unit ENTRY (sensor approach+dummy pass, RFID RC522, servo)
+  • Kanan = Unit EXIT  (sensor pass, servo)
+
+Tiap unit memakai ESP32 sendiri pada port serial TERPISAH (mis. ttyUSB0 =
+ENTRY, ttyUSB1 = EXIT). Dua thread serial berjalan paralel (satu per unit)
+membaca protokol yang sama persis dengan gate_serial_gui.py:
+
+  ST|<state>|<pos>|<frontCm>|<frontNear>|<lcd1>|<lcd2>|<masters>|
+    <passCm>|<rfidVer>|<lastUid>|<lastAuth>|<masterCount>
+
+Fokus versi ini: MENAMPILKAN SEMUA SENSOR kedua unit sekaligus — approach &
+pass per unit — supaya mudah dideteksi sensor mana yang hidup / mana yang
+mati (apalagi approach ENTRY yang terbaca -1). Tanpa ANPR/paddle agar stabil.
+
+Jalankan (dalam lingkungan grafis, port ttyUSB0 & ttyUSB1 terpasang):
+    cd sim
+    .venv/bin/python3.11 gate_dual_gui.py
+"""
+
+import os
+import queue
+import sys
+import threading
+import time
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import serial
+import serial.tools.list_ports
+
+WIN_BG  = "#eef0f3"
+CARD_BG = "#ffffff"
+CARD_BG2 = "#f6f7f9"
+BORDER  = "#dce0e5"
+TEXT    = "#20242a"
+MUTED   = "#5f6a76"
+ACCENT  = "#2f6fd0"
+OK      = "#16794c"
+WARN    = "#9a6b1f"
+ERR     = "#c0392b"
+GRAY    = "#8a94a0"
+
+FONT = "DejaVu Sans"
+
+
+def list_ports():
+    devices = [p.device for p in serial.tools.list_ports.comports()]
+    usb = sorted(d for d in devices if "ttyUSB" in d or "ttyACM" in d)
+    rest = sorted(d for d in devices if d not in usb and "ttyS" not in d)
+    return usb + rest
+
+
+def parse_st(line):
+    """'ST|...' → dict (13 field); None bila bukan baris status sah."""
+    if not line.startswith("ST|"):
+        return None
+    p = line.split("|")
+    if len(p) < 13:
+        return None
+    try:
+        _int = int
+        return {
+            "state":  p[1],
+            "pos":    _int(p[2]),
+            "front":  _int(p[3]),   # sensor approach (ENTRY sah; EXIT -1)
+            "near":   p[4] == "1",
+            "lcd1":   p[5],
+            "lcd2":   p[6],
+            "masters":p[7],
+            "pass":   _int(p[8]),   # sensor pass (dua-duanya sah)
+            "rfid_v": p[9],
+            "last_uid": p[10],
+            "last_auth": p[11],
+            "count":  _int(p[12]),
+        }
+    except ValueError:
+        return None
+
+
+class UnitPanel:
+    """Satu kartu panel utk satu unit (title = ENTRY / EXIT)."""
+
+    def __init__(self, root, title, unit_key, msg_queue=None):
+        self.title      = title
+        self.unit_key   = unit_key
+        self.msg_queue  = msg_queue
+        self.state      = "CLOSED"
+        self.pos        = 120
+        self.front_cm   = -1
+        self.pass_cm    = -1
+        self.vehicle_near = False
+        self.lcd_row1   = "-"
+        self.lcd_row2   = "-"
+        self.master_uid = "-"
+        self.rfid_ver   = "0x00"
+        self.rfid_last_uid = "-"
+        self.rfid_last_auth = "-"
+        self.count      = 0
+        self.connected  = False
+
+        self.card = tk.Frame(root, bg=CARD_BG, highlightbackground=BORDER,
+                             highlightthickness=1)
+        self.card.pack(fill="both", expand=True, padx=6, pady=6)
+        self.card.grid_columnconfigure(0, weight=1)
+
+        self._build_header()
+        self._build_state()
+        self._build_sensor()
+        self._build_rfid()
+        self._build_lcd()
+        self._build_log()
+
+    # ---------------- UI ---------------- 
+    def _kv(self, parent, key, value):
+        tk.Label(parent, text=key + ":", bg=CARD_BG, fg=MUTED,
+                 font=(FONT, 10)).pack(side="left")
+        lv = tk.Label(parent, text=value, bg=CARD_BG, fg=TEXT,
+                      font=(FONT, 11, "bold"))
+        lv.pack(side="left", padx=6)
+        return lv
+
+    def _card_row(self, parent, text):
+        tk.Label(parent, text=text, bg=CARD_BG, fg=MUTED,
+                 font=(FONT, 9)).pack(anchor="w", padx=10, pady=(6, 0))
+
+    def _build_header(self):
+        h = tk.Frame(self.card, bg=CARD_BG)
+        h.pack(fill="x", padx=10, pady=(8, 2))
+        tk.Label(h, text=self.title, bg=CARD_BG, fg=TEXT,
+                 font=(FONT, 13, "bold")).pack(side="left")
+        self.lbl_conn = tk.Label(h, text="Terputus", bg=CARD_BG, fg=ERR,
+                                 font=(FONT, 10, "bold"))
+        self.lbl_conn.pack(side="right")
+
+    def _build_state(self):
+        f = tk.Frame(self.card, bg=CARD_BG)
+        f.pack(fill="x", padx=10)
+        self.lbl_state = tk.Label(f, text="Tertutup", bg=CARD_BG, fg=OK,
+                                  font=(FONT, 15, "bold"))
+        self.lbl_state.pack(anchor="w")
+        info = tk.Frame(f, bg=CARD_BG)
+        info.pack(fill="x", pady=(4, 0))
+        self.lbl_pos = self._kv(info, "Posisi", "120")
+        self.bar_pos = self._mk_bar(f)
+
+    def _mk_bar(self, parent):
+        b = ttk.Progressbar(parent, style="Clean.Horizontal.TProgressbar",
+                            maximum=100, value=0)
+        b.pack(fill="x", padx=10, pady=(2, 0))
+        return b
+
+    def _build_sensor(self):
+        s = self._frame()
+        self._card_row(s, "Sensor Approach (depan palang):")
+        self.lbl_kendaraan = tk.Label(s, text="Jalur kosong", bg=CARD_BG,
+                                      fg=GRAY, font=(FONT, 11, "bold"))
+        self.lbl_kendaraan.pack(anchor="w", padx=10)
+        self.lbl_dist = tk.Label(s, text="--- cm", bg=CARD_BG, fg=TEXT,
+                                 font=(FONT, 16, "bold"))
+        self.lbl_dist.pack(anchor="w", padx=10)
+        self.bar_dist = self._mk_bar(sBCD)
+        self._sensor_pass(s)
+
+    def _sensor_pass(self, box):
+        f = tk.Frame(box, bg=CARD_BG)
+        f.pack(fill="x", padx=10, pady=(4, 0))
+        tk.Label(f, text="Sensor Pass (kendaraan lewat):", bg=CARD_BG,
+                 fg=MUTED, font=(FONT, 9)).pack(side="left")
+        self.lbl_pass = tk.Label(f, text="--- cm", bg=CARD_BG, fg=TEXT,
+                                 font=(FONT, 12, "bold"))
+        self.lbl_pass.pack(side="left", padx=8)
+
+    def _build_rfid(self):
+        r = self._frame()
+        self._card_row(r, "RFID:")
+        self.lbl_rfid = tk.Label(r, text="Tidak merespons", bg=CARD_BG,
+                                 fg=ERR, font=(FONT, 12, "bold"))
+        self.lbl_rfid.pack(anchor="w", padx=10)
+        self.lbl_ver = tk.Label(r, text="versi ---", bg=CARD_BG, fg=MUTED,
+                                font=(FONT, 9))
+        self.lbl_ver.pack(anchor="w", padx=10)
+        self.lbl_master = tk.Label(r, text="-", bg=CARD_BG, fg=TEXT,
+                                   font=(FONT, 11, "bold"))
+        self.lbl_master.pack(anchor="w", padx=10)
+        self.lbl_count = tk.Label(r, text="", bg=CARD_BG, fg=MUTED,
+                                  font=(FONT, 9))
+        self.lbl_count.pack(anchor="w", padx=10)
+
+    def _build_lcd(self):
+        d = self._frame()
+        self._card_row(d, "LCD 16x2")
+        self.lbl_disp1 = tk.Label(d, text="-", bg=CARD_BG, fg=TEXT,
+                                  font=("DejaVu Sans Mono", 10, "bold"))
+        self.lbl_disp1.pack(anchor="w", padx=10)
+        self.lbl_disp2 = tk.Label(d, text="-", bg=CARD_BG, fg=MUTED,
+                                  font=("DejaVu Sans Mono", 9))
+        self.lbl_disp2.pack(anchor="w", padx=10, pady=(0, 6))
+
+    def _build_log(self):
+        self._card_row(self.card, "Log:")
+        self.log_w = scrolledtext.ScrolledText(self.card, height=7,
+                                               relief="flat", borderwidth=0,
+                                               bg=CARD_BG2, fg=TEXT, wrap="none")
+        self.log_w.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.log_w.configure(state="disabled")
+        self.log_w.tag_configure("ok", foreground=OK)
+        self.log_w.tag_configure("err", foreground=ERR)
+        self.log_w.tag_configure("warn", foreground=WARN)
+        self.log_w.tag_configure("info", foreground=MUTED)
+
+    def _frame(self):
+        tk.Frame(self.card, bg=CARD_BG).pack(fill="x", padx=10)
+
+    def log(self, msg, tag="info"):
+        self.log_w.config(state="normal")
+        self.log_w.insert("end", msg + "\n", (tag,))
+        self.log_w.see("end")
+        self.log_w.config(state="disabled")
+
+    # ---------------- assign status ---------------- 
+    def assign(self, st):
+        if not st:
+            return
+        self.state = st.get("state", self.state)
+        self.pos = st.get("pos", self.pos)
+        self.front_cm = st.get("front", self.front_cm)
+        self.pass_cm = st.get("pass", self.pass_cm)
+        self.vehicle_near = st.get("near", self.vehicle_near)
+        self.lcd_row1 = st.get("lcd1", self.lcd_row1)
+        self.lcd_row2 = st.get("lcd2", self.lcd_row2)
+        self.master_uid = st.get("masters", self.master_uid)
+        self.rfid_ver = st.get("rfid_v", self.rfid_ver)
+        self.rfid_last_uid = st.get("last_uid", self.rfid_last_uid)
+        self.rfid_last_auth = st.get("last_auth", self.rfid_last_auth)
+        self.count = st.get("count", self.count)
+
+    def render(self):
+        state_map = {"CLOSED": "Tertutup", "OPEN": "Terbuka",
+                     "OPENING": "Membuka", "CLOSING": "Menutup"}
+        color_map = {"CLOSED": ERR, "OPEN": OK, "OPENING": WARN, "CLOSING": WARN}
+        self.lbl_state.config(text=state_map.get(self.state, self.state),
+                              fg=color_map.get(self.state, TEXT))
+        self.lbl_pos.config(text="%d" % self.pos)
+        self.bar_pos["value"] = (1.0 - min(1.0, max(0.0, (self.pos - 30) / 90.0))) * 100.0
+
+        if self.front_cm < 0:
+            self.lbl_kendaraan.config(text="Jalur kosong (sensor tak terbaca)", fg=GRAY)
+            self.lbl_dist.config(text="--- cm")
+            self.bar_dist["value"] = 0.0
+        else:
+            self.lbl_kendaraan.config(
+                text="Kendaraan terdeteksi" if self.vehicle_near else "Jalur kosong",
+                fg=OK if self.vehicle_near else GRAY)
+            self.lbl_dist.config(text="%d cm" % self.front_cm)
+            self.bar_dist["value"] = (30.0 - min(30.0, self.front_cm)) / 30.0 * 100.0
+
+        self.lbl_pass.config(text=("--- cm" if self.pass_cm < 0 else "%d cm" % self.pass_cm))
+
+        ok = self.rfid_ver not in ("0x00", "-")
+        self.lbl_rfid.config(text="Siap" if ok else "Tidak merespons",
+                             fg=OK if ok else ERR)
+        self.lbl_ver.config(text="versi %s" % self.rfid_ver)
+        self.lbl_master.config(text=self.master_uid)
+        self.lbl_count.config(text="total %d kartu" % self.count)
+
+        self.lbl_disp1.config(text=self.lcd_row1 if self.lcd_row1 != "-" else "-")
+        self.lbl_disp2.config(text=self.lcd_row2)
+
+    def set_conn(self, ok):
+        self.connected = ok
+        self.lbl_conn.config(text="Terhubung" if ok else "Terputus",
+                             fg=OK if ok else ERR)
+        self.log("Koneksi %s." % ("terbuka" if ok else "terputus"),
+                 tag="ok" if ok else "warn")
+
+
+class SerialReader:
+    """Thread pembaca 1 port serial → panel (unit ini sendiri)."""
+
+    def __init__(self, panel, port, on_status):
+        self.panel, self.port = panel, port
+        self.on_status = on_status
+        self.ser = None
+        self._buf = b""
+        self._stop = False
+
+    def open(self):
+        self.ser = serial.Serial(self.port, 115200, timeout=0.2)
+        self.panel.set_conn(True)
+        self.panel.log("Terhubung ke %s" % self.port, tag="ok")
+
+    def close(self):
+        self._stop = True
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+            except serial.SerialException:
+                pass
+        self.panel.set_conn(False)
+
+    def run(self):
+        while not self._stop:
+            if self.ser is None or not self.ser.is_open:
+                time.sleep(0.2)
+                continue
+            try:
+                data = self.ser.read(1024)
+            except (serial.SerialException, OSError):
+                self.panel.log("Koneksi serial terputus.", tag="err")
+                break
+            if not data:
+                continue
+            self._buf += data
+            while b"\n" in self._buf:
+                line, self._buf = self._buf.split(b"\n", 1)
+                txt = line.decode(errors="replace").strip()
+                if txt.startswith(">"):
+                    tag = "info"
+                    if "GRANTED" in txt or "ACCEPTED" in txt:
+                        tag = "ok"
+                    elif "DENIED" in txt or "gagal" in txt or "TIMEOUT" in txt:
+                        tag = "err"
+                    self.panel.log(txt, tag=tag)
+                elif txt.startswith("ST|"):
+                    st = parse_st(txt)
+                    if st:
+                        self.on_status(self.panel, st)
+
+
+class GateDualApp:
+    def __init__(self, root):
+        self.root = root
+        self.readers = []
+        self._poll_scheduled = False
+        root.title("Gate All-in-One — ENTRY & EXIT")
+        root.geometry("1180x780")
+        root.configure(bg=WIN_BG)
+
+        top = tk.Frame(root, bg=WIN_BG)
+        top.pack(side="top", fill="x", padx=12, pady=(10, 6))
+        tk.Label(top, text="Gate Control — All-in-One (ENTRY kiri · EXIT kanan)",
+                 bg=WIN_BG, fg=TEXT, font=("DejaVu Sans", 14, "bold")).pack(side="left")
+        self.lbl_foot = tk.Label(top, text="2 koneksi serial", bg=WIN_BG,
+                                 fg=MUTED, font=("DejaVu Sans", 10))
+        self.lbl_foot.pack(side="right")
+
+        self.panel_entry = tk.Frame(root, bg=CARD_BG)
+        self.panel_exit = tk.Frame(root, bg=CARD_BG)
+        body = tk.Frame(root, bg=WIN_BG)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        self._p_entry = UnitPanel(body, "ENTRY", "ENTRY")
+        self._p_entry.card.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
+        self._p_exit = UnitPanel(body, "EXIT", "EXIT")
+        self._p_exit.card.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
+
+        self._mk_controls()
+        self._mk_log()
+
+        self.port_entry = tk.StringVar(value="")
+        self.port_exit = tk.StringVar(value="")
+        self._defaults()
+        self.root.after(100, self._poll)
+
+    def _mk_controls(self):
+        bar = tk.Frame(self.root, bg=WIN_BG)
+        bar.pack(fill="x", padx=10, pady=(2, 4))
+        for unit, p in (("ENTRY", self._p_entry), ("EXIT", self._p_exit)):
+            ttk.Button(bar, text="Hubungkan %s" % unit,
+                       command=lambda u=unit: self._toggle(u)).pack(side="left",
+                                                                    padx=3)
+
+    def _mk_log(self):
+        f = tk.Frame(self.root, bg=CARD_BG)
+        f.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.log_w = scrolledtext.ScrolledText(f, height=8, relief="flat",
+                                               borderwidth=0, bg=CARD_BG2,
+                                               fg=TEXT, wrap="none",
+                                               state="disabled")
+        self.log_w.pack(fill="both", expand=True)
+
+    def _defaults(self):
+        ports = list_ports()
+        if ports:
+            self.port_entry.set(ports[0])
+        if len(ports) > 1:
+            self.port_exit.set(ports[1])
+
+    def _toggle(self, unit):
+        p = self._p_entry if unit == "ENTRY" else self._p_exit
+        existing = next((r for r in self.readers if r.panel is p), None)
+        if existing:
+            existing.close()
+            self.readers.remove(existing)
+            return
+        port = (self.port_entry if unit == "ENTRY" else self.port_exit).get()
+        if not port:
+            p.log("Pilih port dulu.", tag="warn")
+            return
+        rd = SerialReader(p, port, self._on_status)
+        try:
+            rd.open()
+        except serial.SerialException as e:
+            p.log("Koneksi gagal: %s" % e, tag="err")
+            return
+        self.readers.append(rd)
+        threading.Thread(target=rd.run, daemon=True).start()
+
+    def _on_status(self, panel, st):
+        panel.assign(st)
+        if not self._poll_scheduled:
+            self._poll_scheduled = True
+            self.root.after(80, self._poll)
+
+    def _poll(self):
+        self._poll_scheduled = False
+        self._p_entry.render()
+        self._p_exit.render()
+        self.root.after(80, self._poll)
+
+    def log(self, msg, tag="info"):
+        self.log_w.config(state="normal")
+        self.log_w.insert("end", msg + "\n", (tag,))
+        self.log_w.see("end")
+        self.log_w.config(state="disabled")
+
+
+def main():
+    root = tk.Tk()
+    app = GateDualApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

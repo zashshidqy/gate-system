@@ -5,7 +5,7 @@ DATA_DIR = ROOT / "data"
 PLATE_DB = DATA_DIR / "plat_izin.json"
 
 CAMERA_SOURCE = "0"  # sementara: kamera bawaan laptop (webcam index 0); ganti rtsp://... untuk CCTV nanti
-CAMERA_SOURCE_2 = ""            # kamera tampilan ke-2 (bukan ANPR): isi "1","2", atau rtsp://... ; kosong = mati (hindari rebutan webcam dengan ANPR)
+CAMERA_SOURCE_2 = ""   # kosong = kamera 2 nonaktif (hindari rebutan dgn kamera ANPR yg sama)
 RTSP_TCP = True                 # gunakan RTP over TCP (stabil untuk CCTV di LAN / seperti VLC --rtsp-tcp)
 AUTO_COOLDOWN_S = 6.0           # jeda minimal antar percobaan auto-scan
 MANUAL_COOLDOWN_S = 2.0         # jeda minimal antar scan manual

@@ -37,7 +37,7 @@ class GateSystem:
     """Mesin state gate: port dari logika src/main.cpp."""
 
     def __init__(self, auto_close_ms=10000):
-        self.auto_close_ms = auto_close_ms
+        self.auto_close_ms = auto_close_ms  # disimpan utk kompat; auto-close NONAKTIF (add-on #4)
         self.state = "CLOSED"
         self.pos = 90.0
         self.open_since_ms = 0.0
@@ -50,6 +50,12 @@ class GateSystem:
         self.dist = -1.0
         self.vehicle_near = False
         self.near_streak = 0
+        self.sim_exit_dist = None
+        self.exit_dist = -1.0
+        self.exit_near = False
+        self.exit_streak = 0
+        self.pass_seen = False
+        self.pass_cleared = False
         self.last_dist_ms = 0.0
         self.lcd_row1 = "Gate: CLOSED"
         self.lcd_row2 = "SCAN MASTER CARD"
@@ -72,6 +78,14 @@ class GateSystem:
     # ---------- input (dipanggil GUI/selftest) ----------
     def set_sim_dist(self, value):
         self.sim_dist = value
+
+    def set_sim_exit_dist(self, value):
+        self.sim_exit_dist = value
+
+    def request_close(self):
+        if self.state == "OPEN":
+            self.close_requested = True
+            self.log("> Close requested (manual/C)")
 
     def press_open(self):
         self._open_gate()
@@ -106,6 +120,29 @@ class GateSystem:
             self.near_streak = 0
             self.vehicle_near = False
 
+    def _update_exit(self):
+        # Port dari GateController::updatePass() — sensor EXIT:
+        # near → pass_seen; sudah near lalu kosong → pass_cleared.
+        s = self.sim_exit_dist
+        if s is None or s > MAX_VALID_CM:
+            self.exit_dist = -1.0
+            self.exit_streak = 0
+            self.exit_near = False
+        else:
+            self.exit_dist = float(s)
+            if self.exit_dist <= VEHICLE_CM:
+                self.exit_streak += 1
+            else:
+                self.exit_streak = 0
+            self.exit_near = self.exit_streak >= NEAR_COUNT
+        if self.exit_near:
+            if not self.pass_seen:
+                self.pass_seen = True
+                self.log("> [sensor] PASS V:YES (%dcm)" % int(self.exit_dist))
+        elif self.pass_seen and not self.pass_cleared:
+            self.pass_cleared = True
+            self.log("> Vehicle passed - close armed")
+
     def _open_gate(self):
         if self.state in ("OPEN", "OPENING"):
             return
@@ -138,11 +175,14 @@ class GateSystem:
         if now_ms - self.last_dist_ms >= DIST_INTERVAL_MS:
             self.last_dist_ms = now_ms
             self._update_dist()
+            self._update_exit()
 
         if self.state == "OPEN":
-            if not self.close_requested and now_ms - self.open_since_ms >= self.auto_close_ms:
+            # Tanpa auto-close (add-on #4): tutup hanya setelah kendaraan lewat
+            # sensor EXIT (pass_cleared) atau diminta manual/C.
+            if not self.close_requested and self.pass_cleared:
                 self.close_requested = True
-                self.log("> Auto-close armed")
+                self.log("> Close armed - kendaraan lewat sensor exit")
             if self.close_requested and not self.vehicle_near:
                 self._start_closing()
 
@@ -152,6 +192,8 @@ class GateSystem:
                 self.state = "OPEN"
                 self.pos = 0.0
                 self.open_since_ms = now_ms
+                self.pass_seen = False
+                self.pass_cleared = False
 
         elif self.state == "CLOSING":
             d = self.dist
@@ -175,6 +217,8 @@ class GateSystem:
             msg = "NO VEHICLE!"
         elif self._now < self.auth_until_ms:
             msg = "ACCESS GRANTED" if self.auth_result else "UNAUTHORIZED"
+        elif self.state == "OPEN" and self.close_requested and self.pass_cleared:
+            msg = "VEHICLE PASSED!"
         elif self.state == "OPEN" and self.close_requested and self.vehicle_near:
             msg = "WAIT VEHICLE!"
         elif self.state == "OPENING":
@@ -232,7 +276,7 @@ class GateSimApp:
         self.lbl_servo = self._row(grid, 1, "Servo")
         self.lbl_vehicle = self._row(grid, 2, "Kendaraan")
         self.lbl_dist = self._row(grid, 3, "Jarak")
-        self.lbl_timer = self._row(grid, 4, "Timer tutup")
+        self.lbl_exit_s = self._row(grid, 4, "Sensor EXIT")
         self.lbl_master = self._row(grid, 5, "Master UID")
 
         # LCD 16x2 panel pengganti
@@ -263,19 +307,26 @@ class GateSimApp:
 
         ttk.Label(ctrl, text="(nilai > 60cm = tidak terdeteksi / noise)").pack(anchor="w", pady=(0, 6))
 
+        ttk.Label(ctrl, text="Sensor EXIT (deteksi kendaraan lewat)").pack(anchor="w")
+        self.exit_var = tk.DoubleVar(value=80)
+        self.exit_scale = ttk.Scale(ctrl, from_=0, to=100, variable=self.exit_var,
+                                    command=lambda _v: self._exit_changed())
+        self.exit_scale.pack(fill="x")
+        self.exit_lbl = ttk.Label(ctrl, text="")
+        self.exit_lbl.pack(anchor="w")
+        self._exit_changed()
+
         ttk.Button(ctrl, text="Tap Kartu MASTER (RFID)",
                    command=self.sys.scan_master).pack(fill="x", pady=2)
         ttk.Button(ctrl, text="Tap Kartu ASING (RFID)",
                    command=self.sys.scan_other).pack(fill="x", pady=2)
         ttk.Button(ctrl, text="Tombol BUKA (cadangan)",
                    command=self.sys.press_open).pack(fill="x", pady=2)
+        ttk.Button(ctrl, text="Tutup Manual (kirim 'C')",
+                   command=self.sys.request_close).pack(fill="x", pady=2)
 
-        ttk.Label(ctrl, text="Auto-close:").pack(anchor="w", pady=(8, 0))
-        self.ac_var = tk.StringVar(value="10 detik")
-        ac = ttk.Combobox(ctrl, textvariable=self.ac_var, state="readonly", width=10,
-                          values=["3 detik", "5 detik", "10 detik", "20 detik"])
-        ac.pack(anchor="w")
-        ac.bind("<<ComboboxSelected>>", self._ac_changed)
+        ttk.Label(ctrl, text="Mode tutup: SETELAH kendaraan melewati sensor\nEXIT (tanpa auto-close).",
+                  justify="left").pack(anchor="w", pady=(8, 0))
 
         log_frame = ttk.LabelFrame(right, text="Serial monitor (debug)")
         log_frame.pack(fill="both", expand=True, pady=4)
@@ -296,10 +347,11 @@ class GateSimApp:
         sim = None if v > MAX_VALID_CM else v
         self.sys.set_sim_dist(sim)
 
-    def _ac_changed(self, _e):
-        mm = {"3 detik": 3000, "5 detik": 5000, "10 detik": 10000, "20 detik": 20000}
-        self.sys.auto_close_ms = mm.get(self.ac_var.get(), 10000)
-        self.sys.log("> Auto-close diubah ke " + self.ac_var.get())
+    def _exit_changed(self):
+        v = self.exit_scale.get()
+        self.exit_lbl.config(text="%.0f cm" % v)
+        sim = None if v > MAX_VALID_CM else v
+        self.sys.set_sim_exit_dist(sim)
 
     # ---------- loop ----------
     def _loop(self):
@@ -328,11 +380,7 @@ class GateSimApp:
         self.lbl_servo.config(text="%d deg" % round(s.pos))
         self.lbl_vehicle.config(text="V:YES" if s.vehicle_near else "V:NO")
         self.lbl_dist.config(text="---" if s.dist < 0 else "%.0f cm" % s.dist)
-        if s.state == "OPEN":
-            remain = max(0.0, s.auto_close_ms - (self._now_ms() - s.open_since_ms))
-            self.lbl_timer.config(text="%.1f s" % (remain / 1000.0))
-        else:
-            self.lbl_timer.config(text="-")
+        self.lbl_exit_s.config(text="V:YES" if s.exit_near else "V:NO" if s.pass_seen else "—")
         self.lbl_master.config(text="—" if s.master_uid is None
                                else GateSystem._fmt_uid(s.master_uid))
 
@@ -405,31 +453,51 @@ def selftest():
     run(RAUTH_DURATION_MS)
     check("gate tetap OPEN", s.state == "OPEN")
 
-    # 4. Auto-close: kendaraan lewat → menutup penuh
+    # 4. TANPA auto-close (add-on #4): kendaraan tinggal pergi tapi belum
+    #    melewati sensor EXIT → gate tetap terbuka walaupun >10 detik.
     s.set_sim_dist(None)
-    run(200)
-    rem = s.auto_close_ms - (t - s.open_since_ms)
-    run(max(0, rem) + 100)
-    check("auto-close mulai menutup", s.state == "CLOSING")
+    run(30000)
+    check("tanpa auto-close tetap OPEN", s.state == "OPEN" and
+          not s.pass_cleared)
+
+    # 5. Kendaraan lewat sensor EXIT → pass_cleared → tutup penuh
+    s.set_sim_exit_dist(10)
+    run(600)
+    check("pass exit terdeteksi", s.pass_seen)
+    s.set_sim_exit_dist(None)
+    run(600)
+    check("pass exit cleared -> arm close", s.pass_cleared and s.state == "CLOSING")
     run(2000)
     check("gate CLOSED", s.state == "CLOSED")
 
-    # 5. Halangan saat menutup → buka kembali
+    # 6. Halangan saat menutup → buka kembali
+    s.set_sim_exit_dist(None)
     s.set_sim_dist(10)
     run(600)
     s.scan_master()
     run(2500)
     check("buka untuk tes halangan", s.state == "OPEN")
     s.set_sim_dist(None)
-    run(200)
-    rem = s.auto_close_ms - (t - s.open_since_ms)
-    run(max(0, rem) + 100)
+    s.set_sim_exit_dist(10)
+    run(600)
+    s.set_sim_exit_dist(None)
+    run(600)
     check("closing untuk tes halangan", s.state == "CLOSING")
     s.set_sim_dist(8)
     run(300)
     check("halangan terdeteksi saat menutup", s.state in ("OPENING", "OPEN"))
     run(2500)
     check("gate membuka kembali", s.state == "OPEN")
+
+    # 7. Tutup manual (kirim 'C') tetap jalan walaupun tanpa pass exit
+    s.set_sim_dist(None)
+    s.set_sim_exit_dist(None)
+    run(400)
+    s.request_close()
+    run(600)
+    check("tutup manual bekerja", s.state == "CLOSING")
+    run(2000)
+    check("gate CLOSED (manual)", s.state == "CLOSED")
 
     print("==== SELFTEST ====")
     for name, passed in f.items():

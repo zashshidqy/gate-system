@@ -13,12 +13,13 @@ class StatusReport {
 public:
   // Bangun 2 baris tampilan dari kondisi saat ini
   void buildRows(GateController& gate, const RfidReader& rfid,
-                 unsigned long authUntilMs, bool authResult, bool authPending);
+                 unsigned long authUntilMs, bool authResult, bool authPending,
+                 bool platePending);
 
   // Kirim: ST|<state>|<pos>|<dist>|<vehicle>|<row1>|<row2>|<masters>|<exitCm>|<rfidVer>|<lastUid>|<lastAuth>|<count>
   void send(GateController& gate, const RfidReader& rfid,
             unsigned long authUntilMs, bool authResult, char lastAuth,
-            bool authPending);
+            bool authPending, bool platePending);
 
   const char* row1() const { return lcdRow1; }
   const char* row2() const { return lcdRow2; }

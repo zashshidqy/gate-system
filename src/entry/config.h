@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 // ============================================================
-//  CONFIG — semua pin & konstanta sistem gate
+//  CONFIG — UNIT ENTRY (gerbang masuk)
 //  Ubah nilai di sini bila perlu; jangan ubah di file lain.
 // ============================================================
 
@@ -10,11 +10,12 @@
 #define SERVO_PIN 18
 #define BTN_OPEN 4
 
-// HC-SR04 #1 (depan — deteksi kendaraan dekat)
+// HC-SR04 #1 (approach — deteksi kendaraan menunggu di depan palang)
+// Wiring fisik: TRIG → GPIO 13, ECHO → GPIO 14.
 #define TRIG_PIN 13
 #define ECHO_PIN 14
 
-// HC-SR04 #2 (exit — deteksi kendaraan sudah lewat)
+// HC-SR04 #2 (pass — deteksi kendaraan sudah lewat)
 // Pojok header (32/33) agar jauh dari servo(18) & RFID(15/16/17/25/27)
 #define TRIG2_PIN 32
 #define ECHO2_PIN 33
@@ -27,13 +28,15 @@
 #define RFID_MOSI 17
 
 // ---- Sensor ----
-#define VEHICLE_CM 15     // kendaraan "dekat" jika <= 30cm dari sensor
-#define MAX_VALID_CM 30    // baca di atas ini = noise/jauh, anggap tidak ada objek
-#define NEAR_COUNT 3       // butuh N baca berurutan dekat sebelum V:YES
-#define OBSTACLE_CM 15     // halangan saat menutup (<15cm)
+#define VEHICLE_CM 50      // kendaraan "dekat" jika <= 50cm (approach ENTRY)
+#define PASS_VEHICLE_CM 80 // kendaraan "lewat" jika <= 80cm (sensor pass)
+#define MAX_VALID_CM 200    // baca di atas ini = noise/jauh, anggap tidak ada objek
+#define NEAR_COUNT 3        // butuh N baca berurutan dekat sebelum V:YES
+#define OBSTACLE_CM 10      // halangan saat menutup (<10cm)
 
 // ---- Timing ----
-#define AUTO_CLOSE_MS   10000UL  // fallback auto-close setelah terbuka 10s
+// TANPA AUTO_CLOSE_MS — gate boleh lama terbuka; tutup hanya setelah
+// passCleared (kendaraan lewat sensor exit) atau perintah 'C'.
 #define STEP_DELAY_MS   10       // interval gerak servo per tick (non-blocking)
 #define DEBOUNCE_MS     50       // interval cek button
 #define DIST_INTERVAL_MS 150     // interval pembacaan sensor (depan+exit)
@@ -48,8 +51,14 @@
 #define SERVO_MAX_US_STEP 25     // max lompatan pulsa per tick (~2.4° @10ms) → halus
 
 // ---- Kontrol ----
-// 1 = RFID aktif; 0 = dimask (gate dibuka via tombol/serial)
+// 1 = RFID aktif; 0 = dimask (gate dibuka via ANPR/tombol/serial).
 #define RFID_ENABLED 1
+
+// ---- Mode unit ----
+// ENTRY : 2x HC-SR04 (approach + pass); wajib ada kendaraan dekat sebelum buka.
+#ifndef GATE_MODE_EXIT
+#define GATE_MODE_EXIT 0
+#endif
 
 // ---- RFID multi-master (daftar kartu yang berhak buka gerbang) ----
 #define MAX_MASTERS         8        // maksimal jumlah kartu terotorisasi
@@ -59,7 +68,14 @@
 #define RFID_READ_ATTEMPTS  6        // percobaan REQA+select saat kartu terdeteksi
 #define RFID_READ_RETRY_MS  25       // jeda antar percobaan baca kartu (ms)
 #define RFID_FAIL_BACKOFF_MS 1500UL  // jeda scan ulang setelah baca gagal (anti penuh)
+#define PLATE_TIMEOUT_MS    15000UL  // jendela tunggu validasi plat (ANPR) setelah kartu sah
 
 // ---- Posisi servo ----
 #define POS_CLOSED 120
 #define POS_OPEN 30
+
+// ---- Buzzer (greeting sound) ----
+// Buzzer pasif di GPIO2 (pada board DOIT DevKit, LED biru onboard juga di
+// GPIO2 — LED ikut berkedip saat berbunyi). Set -1 untuk menonaktifkan.
+#define BUZZER_PIN 2
+#define BUZZER_LEDC_CH 7   // kanal LEDC terpisah dari servo

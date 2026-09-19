@@ -22,11 +22,14 @@ import serial
 import serial.tools.list_ports
 from PIL import Image, ImageTk
 
+from passage_log import PassageLog, ROOT
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 AUTO_CLOSE_S = 10.0
+PLATE_VALIDATE_S = 14.0
 POS_OPEN, POS_CLOSED = 30, 120
 
 # ---- palet netral & bersih ----
@@ -47,6 +50,134 @@ def list_ports():
     usb = sorted(d for d in devices if "ttyUSB" in d or "ttyACM" in d or "rfcomm" in d)
     rest = sorted(d for d in devices if d not in usb and "ttyS" not in d)
     return usb + rest
+
+
+class CaptureViewer:
+    """Jendela riwayat capture: thumbnail dari data/captures + info dari gate.db."""
+    def __init__(self, master, plog):
+        self.plog = plog
+        self._photos = []
+        self.win = tk.Toplevel(master)
+        self.win.title("Hasil Capture Kamera")
+        self.win.configure(bg=WIN_BG)
+        self.win.geometry("1000x600")
+        self.win.minsize(720, 460)
+        self._build()
+        self.refresh()
+
+    def _build(self):
+        top = tk.Frame(self.win, bg=WIN_BG)
+        top.pack(fill="x", padx=10, pady=(10, 4))
+        tk.Label(top, text="Hasil Capture (data/captures) + riwayat access (gate.db)",
+                 bg=WIN_BG, fg=TEXT, font=("DejaVu Sans", 11, "bold")).pack(side="left")
+        self.lbl_count = tk.Label(top, text="", bg=WIN_BG, fg=MUTED,
+                                  font=("DejaVu Sans", 9))
+        self.lbl_count.pack(side="left", padx=10)
+        ttk.Button(top, text="Segarkan", command=self.refresh).pack(side="right")
+
+        body = tk.Frame(self.win, bg=WIN_BG)
+        body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        body.grid_columnconfigure(0, weight=3)
+        body.grid_columnconfigure(1, weight=2)
+        body.grid_rowconfigure(0, weight=1)
+
+        left = tk.Frame(body, bg=CARD_BG, highlightbackground=BORDER,
+                        highlightthickness=1)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_rowconfigure(0, weight=1)
+        self._canvas = tk.Canvas(left, bg=CARD_BG, highlightthickness=0)
+        vsb = ttk.Scrollbar(left, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._grid_f = tk.Frame(self._canvas, bg=CARD_BG)
+        self._grid_f.bind("<Configure>",
+                          lambda e: self._canvas.configure(
+                              scrollregion=self._canvas.bbox("all")))
+        self._canvas.create_window((0, 0), window=self._grid_f, anchor="nw")
+
+        right = tk.Frame(body, bg=CARD_BG, highlightbackground=BORDER,
+                         highlightthickness=1)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        self.preview_lbl = tk.Label(right, text="Klik gambar di kiri untuk melihat",
+                                    bg=CARD_BG, fg=MUTED, font=("DejaVu Sans", 10))
+        self.preview_lbl.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        self.meta_lbl = tk.Label(right, text="", bg=CARD_BG, fg=MUTED,
+                                 font=("DejaVu Sans Mono", 9), justify="left",
+                                 anchor="w", wraplength=380)
+        self.meta_lbl.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+
+    def refresh(self):
+        for w in self._grid_f.winfo_children():
+            w.destroy()
+        self._photos = []
+        if self.plog is None:
+            tk.Label(self._grid_f, text="PassageLog tidak tersedia (%s)"
+                     % getattr(self, "_plog_error", "?"), bg=CARD_BG, fg=ERR
+                     ).pack(pady=20)
+            return
+        rows = self.plog.recent(40)
+        self.lbl_count.config(text="%d catatan terakhir" % len(rows))
+        if not rows:
+            tk.Label(self._grid_f, text="Belum ada capture.",
+                     bg=CARD_BG, fg=GRAY).pack(pady=20)
+            return
+        cols = 3
+        for i, r in enumerate(rows):
+            card = tk.Frame(self._grid_f, bg=CARD_BG, highlightbackground=BORDER,
+                            highlightthickness=1)
+            card.grid(row=i // cols, column=i % cols, sticky="nsew", padx=4, pady=4)
+            self._grid_f.grid_columnconfigure(i % cols, weight=1)
+
+            path = None
+            rel = r.get("image_path")
+            if rel:
+                cand = ROOT / rel
+                if cand.exists():
+                    path = cand
+            photo = None
+            try:
+                if path is not None:
+                    im = Image.open(path)
+                    im.thumbnail((150, 112))
+                    photo = ImageTk.PhotoImage(im)
+                    self._photos.append(photo)
+                    img = tk.Label(card, image=photo, bg=CARD_BG, cursor="hand2")
+                else:
+                    img = tk.Label(card, text="(tanpa foto)", bg=CARD_BG, fg=GRAY,
+                                   height=6, width=22)
+            except Exception:
+                img = tk.Label(card, text="(gambar rusak)", bg=CARD_BG, fg=ERR,
+                               height=6, width=22)
+            img.pack(padx=4, pady=(4, 0))
+            txt = "%(ts)s\n%(method)s | %(uid)s\n%(plate)s\n%s" % (
+                r, "IZIN" if r["allowed"] else "TOLAK")
+            tk.Label(card, text=txt, bg=CARD_BG, fg=TEXT,
+                     font=("DejaVu Sans Mono", 8), justify="left").pack(
+                padx=4, pady=(0, 4))
+            img.bind("<Button-1>", lambda e, rr=r, pth=path: self._show(rr, pth))
+
+    def _show(self, r, path):
+        self.preview_lbl.configure(image="", text="")
+        if path is not None and path.exists():
+            try:
+                im = Image.open(path)
+                im.thumbnail((540, 430))
+                photo = ImageTk.PhotoImage(im)
+                self.preview_lbl.configure(image=photo, text="")
+                self.preview_lbl.image = photo
+            except Exception as e:
+                self.preview_lbl.configure(image="", text="Gagal buka: %s" % e)
+        else:
+            self.preview_lbl.configure(image="", text="(tidak ada foto)")
+        self.meta_lbl.config(text="%s\nMetode: %s\nArah: %s\nUID: %s\nPlat: %s\n"
+                             "Hasil: %s\ngate.db#%d"
+                             % (r["ts"], r["method"], r["direction"],
+                                r["uid"], r["plate"],
+                                "IZIN" if r["allowed"] else "TOLAK",
+                                r["id"]))
 
 
 class GateSerialApp:
@@ -71,6 +202,10 @@ class GateSerialApp:
         self.rfid_last_auth = '-'
         self._rfid_last_uid_seen = None
 
+        # validasi plat (RFID + ANPR dua-lapis)
+        self._plate_pending = False
+        self._plate_pending_until = 0.0
+
         # pelacak perubahan untuk Log Sistem
         self._prev_state = self.state
         self._prev_vehicle = False
@@ -78,6 +213,7 @@ class GateSerialApp:
         self._prev_masters = None
         self._syswin = None
         self._sys_text = None
+        self._capwin = None
         self._last_st_ms = None
         self._heartbeat_off = False
 
@@ -89,28 +225,28 @@ class GateSerialApp:
         self._anpr_error = None
         self._anpr_q = queue.Queue()
         self._log_q = queue.Queue()
-        self._cam2 = None
         try:
             from anpr.plate_service import AnprService
             self._anpr = AnprService()
-            from anpr.camera_source import CameraSource
-            from anpr.config import CAMERA_SOURCE_2
-            self._cam2 = CameraSource(CAMERA_SOURCE_2)
         except Exception as e:
             self._anpr_error = str(e)
+
+        self._plog = None
+        self._plog_error = None
+        try:
+            self._plog = PassageLog()
+        except Exception as e:
+            self._plog_error = str(e)
 
         self._preview_lock = threading.Lock()
         self._preview_pil = None
         self._preview_bgr = None
-        self._preview_cam2_pil = None
         self._preview_seq = 0
         self._preview_img = None
-        self._preview_cam2_img = None
         self._overlay = None
         self._preview_stop = False
         self._preview_w, self._preview_h = 368, 276
         self._cam_source_sync = ""
-        self._cam2_source_sync = ""
         if self._anpr is not None:
             threading.Thread(target=self._preview_loop, daemon=True).start()
 
@@ -327,6 +463,7 @@ class GateSerialApp:
             b.grid(row=0, column=2 + i, sticky="ew", padx=3, pady=3)
             controls.grid_columnconfigure(2 + i, weight=1)
         buttons2 = [
+            ("Lihat Capture", self._toggle_capture_viewer, "TButton"),
             ("Tambah Master", self._send_addmode, "TButton"),
             ("Hapus Master", self._send_delmode, "TButton"),
             ("Daftar Master", self._send_list, "TButton"),
@@ -387,21 +524,12 @@ class GateSerialApp:
                                    state="disabled")
         self.btn_scan.pack(side="left", padx=10)
 
-        row1 = ttk.Frame(af)
-        row1.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 2))
-        ttk.Label(row1, text="Kamera 2:", style="Card.TLabel").pack(side="left")
-        from anpr.config import CAMERA_SOURCE_2
-        self.cam2_source = tk.StringVar(value=CAMERA_SOURCE_2)
-        self._cam2_source_sync = CAMERA_SOURCE_2
-        ttk.Entry(row1, textvariable=self.cam2_source, width=48).pack(side="left", padx=(8, 4))
-        ttk.Button(row1, text="Terapkan", command=self._apply_cam2_source).pack(side="left")
-
         self.lbl_anpr = ttk.Label(af, text=self._anpr_status_text(), style="CardCaption.TLabel",
                                   anchor="w")
-        self.lbl_anpr.grid(row=2, column=0, sticky="ew", padx=8, pady=(2, 2))
+        self.lbl_anpr.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 2))
 
         pv = ttk.Frame(af)
-        pv.grid(row=3, column=0, sticky="ew", padx=8, pady=(2, 6))
+        pv.grid(row=2, column=0, sticky="ew", padx=8, pady=(2, 6))
         pv.grid_columnconfigure(0, weight=1)
         pv.grid_columnconfigure(1, weight=1)
         pv1 = tk.Frame(pv, bg="#f6f7f9", highlightbackground=BORDER, highlightthickness=1)
@@ -410,12 +538,12 @@ class GateSerialApp:
         pv2.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
         tk.Label(pv1, text="Kamera ANPR", bg="#f6f7f9", fg=MUTED,
                  font=("DejaVu Sans", 9, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
-        tk.Label(pv2, text="Kamera 2", bg="#f6f7f9", fg=MUTED,
+        tk.Label(pv2, text="Hasil Capture (terakhir)", bg="#f6f7f9", fg=MUTED,
                  font=("DejaVu Sans", 9, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
         self.preview_lbl = tk.Label(pv1, text="Kamera mati / belum terbuka", fg=GRAY,
                                     bg="#f6f7f9", font=("DejaVu Sans", 10))
         self.preview_lbl.pack(padx=4, pady=4, expand=True)
-        self.preview_lbl2 = tk.Label(pv2, text="Kamera mati / belum terbuka", fg=GRAY,
+        self.preview_lbl2 = tk.Label(pv2, text="Belum ada capture", fg=GRAY,
                                      bg="#f6f7f9", font=("DejaVu Sans", 10))
         self.preview_lbl2.pack(padx=4, pady=4, expand=True)
 
@@ -465,12 +593,7 @@ class GateSerialApp:
             args=(cam, "_cam_source_sync", "_preview_pil", "_preview_bgr", True),
             daemon=True)
         self._gr_cam.start()
-        if self._cam2 is not None and self._cam2.source:
-            self._gr_cam2 = threading.Thread(
-                target=self._grab_worker,
-                args=(self._cam2, "_cam2_source_sync", "_preview_cam2_pil", None, False),
-                daemon=True)
-            self._gr_cam2.start()
+        self._last_capture_pil = None
 
     def _draw_overlay(self, frame, boxes, banner):
         import cv2
@@ -490,21 +613,10 @@ class GateSerialApp:
     def _update_preview(self):
         with self._preview_lock:
             pil = self._preview_pil
-            pil2 = self._preview_cam2_pil
         if pil is not None and pil is not getattr(self, "_shown_pil", None):
             self._shown_pil = pil
             self._preview_img = ImageTk.PhotoImage(pil)
             self.preview_lbl.configure(image=self._preview_img, text="")
-        if pil2 is not None and pil2 is not getattr(self, "_shown_pil2", None):
-            self._shown_pil2 = pil2
-            self._preview_cam2_img = ImageTk.PhotoImage(pil2)
-            self.preview_lbl2.configure(image=self._preview_cam2_img, text="")
-
-    def _apply_cam2_source(self):
-        if self._cam2 is not None:
-            src = self.cam2_source.get().strip()
-            if src:
-                self._cam2.set_source(src)
 
     def _anpr_status_text(self):
         if self._anpr_error:
@@ -524,6 +636,13 @@ class GateSerialApp:
         if self._anpr is not None:
             if self.anpr_on.get():
                 self._sync_camera_source()
+                self._send("P")
+                self._log("Validasi plat AKTIF — tap RFID wajib ada plat terdeteksi kamera.",
+                          tag="warn")
+            else:
+                self._send("p")
+                self._log("Validasi plat NONAKTIF — RFID normal (tanpa cek plat).",
+                          tag="info")
             self.btn_scan.config(state="normal" if self.anpr_on.get() else "disabled")
             self.lbl_anpr.config(text=self._anpr_status_text())
         else:
@@ -561,10 +680,15 @@ class GateSerialApp:
     def _drain_anpr_queue(self):
         while True:
             try:
-                res = self._anpr_q.get_nowait()
+                item = self._anpr_q.get_nowait()
             except queue.Empty:
                 return
-            self._anpr_show(res)
+            if (isinstance(item, tuple) and item and item[0] == "PLATE_VALIDATE"):
+                self._plate_result(item[1])
+            elif (isinstance(item, tuple) and item and item[0] == "CAPTURE"):
+                self._show_capture(item[1])
+            else:
+                self._anpr_show(item)
 
     def _anpr_show(self, res):
         plate = res["plate"] or "-"
@@ -579,6 +703,12 @@ class GateSerialApp:
         if res["allowed"]:
             self._send("O")
             self._log("Buka gate via ANPR.", tag="ok")
+        if res["ok"] and res["plate"]:
+            threading.Thread(target=self._capture,
+                             args=("anpr", "ANPR"),
+                             kwargs={"plate": res["plate"],
+                                     "allowed": bool(res["allowed"])},
+                             daemon=True).start()
 
     def _anpr_auto_check(self):
         if self._anpr is None or not self.anpr_on.get():
@@ -586,6 +716,108 @@ class GateSerialApp:
         if not self._anpr.can_auto():
             return
         threading.Thread(target=self._anpr_worker, daemon=True).start()
+
+    # ------------------------------------------------------------ capture
+    def _capture(self, prefix, method, uid=None, plate=None, allowed=True,
+                 note=None):
+        """Capture frame kamera + catat ke database (dipanggil di thread)."""
+        if self._plog is None:
+            self._log("[capture] PassageLog tidak aktif: %s" % self._plog_error,
+                      tag="err")
+            return None
+        with self._preview_lock:
+            frame = self._preview_bgr
+            if frame is not None:
+                frame = frame.copy()
+        plog = PassageLog()
+        try:
+            img = plog.save_image(frame, prefix)
+            plog.record(direction="ENTRY", method=method, uid=uid,
+                        plate=plate, allowed=allowed,
+                        image_path=img, note=note)
+        finally:
+            plog.close()
+        if img:
+            self._log("[capture] %s disimpan -> %s" % (prefix, img), tag="ok")
+            self._anpr_q.put(("CAPTURE", img))
+        else:
+            self._log("[capture] %s: kamera tak tersedia (frame kosong)" % prefix,
+                      tag="warn")
+        return img
+
+    def _show_capture(self, img_path):
+        """Tampilkan gambar capture terakhir ke panel kanan (thread-aman)."""
+        try:
+            path = ROOT / img_path if not os.path.isabs(img_path) else img_path
+            im = Image.open(path)
+            im.thumbnail((368, 276))
+            self._last_capture_pil = ImageTk.PhotoImage(im)
+            self.preview_lbl2.configure(image=self._last_capture_pil, text="")
+        except Exception as e:
+            self.preview_lbl2.configure(image="", text="Capture: %s" % e)
+
+    # -------------------------------------------- validasi plat (RFID + ANPR)
+    def _trigger_plate_validation(self):
+        """Kartu sah & ESP32 menahan buka ('V') → minta ANPR baca plat."""
+        self._plate_pending = True
+        self._plate_pending_until = self._now() + PLATE_VALIDATE_S
+        if self._anpr is None:
+            self._log("[plate] ANPR tidak tersedia — akses ditolak.", tag="err")
+            self._send("N")
+            self._plate_pending = False
+            return
+        if not self.anpr_on.get():
+            self._log("[plate] ANPR nonaktif — akses ditolak.", tag="err")
+            self._send("N")
+            self._plate_pending = False
+            return
+        self._sync_camera_source()
+        self._log("[plate] Kartu sah — validasi plat dari kamera...", tag="warn")
+        threading.Thread(target=self._plate_worker, daemon=True).start()
+
+    def _plate_worker(self):
+        try:
+            with self._preview_lock:
+                frame = None if self._preview_bgr is None else self._preview_bgr.copy()
+            if frame is None:
+                result = {"ok": False, "plate": None, "allowed": False,
+                          "msg": "tidak ada frame kamera"}
+            else:
+                result = self._anpr.attempt(frame)
+        except Exception as e:
+            result = {"ok": False, "plate": None, "allowed": False,
+                      "msg": "error: %s" % e}
+        self._anpr_q.put(("PLATE_VALIDATE", result))
+
+    def _plate_result(self, res):
+        if not self._plate_pending:
+            return
+        if self._now() > self._plate_pending_until:
+            self._plate_pending = False
+            self._send("N")
+            self._log("[plate] Timeout validasi — akses ditolak.", tag="err")
+            return
+        self._plate_pending = False
+        plate = res.get("plate")
+        allowed = bool(res.get("allowed"))
+        msg = res.get("msg", "")
+        if plate and res.get("ok") and allowed:
+            self._send("G")
+            self._log("[plate] %s terverifikasi — GERBANG DIBUKA." % plate, tag="ok")
+            threading.Thread(target=self._capture,
+                             args=("anpr", "ANPR"),
+                             kwargs={"plate": plate, "allowed": True,
+                                     "note": "rfid+plat terverifikasi"},
+                             daemon=True).start()
+        else:
+            self._send("N")
+            alasan = plate if plate else "TIDAK ADA PLAT terdeteksi"
+            self._log("[plate] %s (%s) — akses DITOLAK." % (alasan, msg), tag="err")
+            threading.Thread(target=self._capture,
+                             args=("anpr", "ANPR"),
+                             kwargs={"plate": plate, "allowed": False,
+                                     "note": "rfid+plat gagal: %s" % msg},
+                             daemon=True).start()
 
     # ------------------------------------------------------------------ serial
     def _refresh_ports(self):
@@ -683,7 +915,6 @@ class GateSerialApp:
                 self._set_conn(False)
                 self._log("Koneksi serial terputus.", tag="warn")
         self._cam_source_sync = self.anpr_source.get().strip()
-        self._cam2_source_sync = self.cam2_source.get().strip()
         self._update_preview()
         self._drain_anpr_queue()
         self._render_static()
@@ -762,11 +993,24 @@ class GateSerialApp:
         if self.rfid_last_uid != "-" and self.rfid_last_uid != self._rfid_last_uid_seen:
             self._rfid_last_uid_seen = self.rfid_last_uid
             outcomes = {'G': "GRANTED", 'D': "DENIED", 'P': "TUNGGU KENDARAAN",
-                        'A': "JADI MASTER", 'R': "DIHAPUS"}
+                        'A': "JADI MASTER", 'R': "DIHAPUS", 'V': "MENUNGGU VALIDASI PLAT"}
             outcome = outcomes.get(self.rfid_last_auth, "SCAN")
-            tag = "ok" if outcome in ("GRANTED", "JADI MASTER", "TUNGGU KENDARAAN") else \
+            tag = "ok" if outcome in ("GRANTED", "JADI MASTER", "TUNGGU KENDARAAN", "MENUNGGU VALIDASI PLAT") else \
                 ("warn" if outcome == "DIHAPUS" else "err")
             self._log("[rfid] kartu %s -> %s" % (self.rfid_last_uid, outcome), tag=tag)
+            allowed = outcome in ("GRANTED", "TUNGGU KENDARAAN", "JADI MASTER")
+            threading.Thread(target=self._capture,
+                             args=("rfid", "RFID"),
+                             kwargs={"uid": self.rfid_last_uid,
+                                     "allowed": allowed},
+                             daemon=True).start()
+
+        # ---- Kadar validasi plat: 'V' dari ESP32 → minta ANPR baca plat ----
+        if self.rfid_last_auth == 'V':
+            if not self._plate_pending:
+                self._trigger_plate_validation()
+        elif self._plate_pending:
+            self._plate_pending = False
 
         if (self.state == "CLOSED" and self.vehicle_near
                 and self._anpr is not None and self.anpr_on.get()):
@@ -842,6 +1086,8 @@ class GateSerialApp:
             hint, hf = "Kartu %s DITOLAK — bukan terotorisasi." % self.rfid_last_uid, ERR
         elif self.rfid_last_auth == 'P':
             hint, hf = "Kartu diterima — MENUNGGU kendaraan di depan sensor.", WARN
+        elif self.rfid_last_auth == 'V':
+            hint, hf = "Kartu sah — validasi PLAT dari kamera berlangsung...", WARN
         elif self.vehicle_near:
             hint, hf = "Siap! Tempel kartu terotorisasi untuk membuka gerbang.", OK
         else:
@@ -852,6 +1098,8 @@ class GateSerialApp:
             txt, fg = "-", GRAY
         elif self.rfid_last_auth == 'G':
             txt, fg = "%s (GRANTED)" % self.rfid_last_uid, OK
+        elif self.rfid_last_auth == 'V':
+            txt, fg = "%s (VALIDASI PLAT)" % self.rfid_last_uid, WARN
         elif self.rfid_last_auth == 'P':
             txt, fg = "%s (TUNGGU KENDARAAN)" % self.rfid_last_uid, WARN
         elif self.rfid_last_auth == 'A':
@@ -908,6 +1156,18 @@ class GateSerialApp:
             self._sys_append(msg, tag)
 
     # ------------------------------------------------------------ log sistem
+    def _toggle_capture_viewer(self):
+        if self._capwin is not None and self._capwin.winfo_exists():
+            self._capwin.destroy()
+            self._capwin = None
+            self._log("Jendela Capture ditutup.", tag="info")
+            return
+        self._capwin = CaptureViewer(self.root, self._plog)
+        self._capwin.win.protocol("WM_DELETE_WINDOW",
+                                  lambda: (self._capwin.win.destroy(),
+                                           setattr(self, "_capwin", None)))
+        self._log("Jendela Capture dibuka.", tag="info")
+
     def _toggle_syslog(self):
         if self._syswin is not None and self._syswin.winfo_exists():
             self._syswin.destroy()

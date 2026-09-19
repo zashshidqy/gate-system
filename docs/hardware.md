@@ -17,6 +17,7 @@ Daftar komponen (bill of materials), kebutuhan daya, dan ringkasan pin. Wiring d
 | 6 | Tag / kartu RFID (13.56MHz, mifare klasik) | 1+ | Kartu pertama saat boot = MASTER |
 | 7 | Breadboard + kabel jumper | secukupnya | Wiring |
 | 8 | Power supply eksternal 5V (opsional) | 1 | Hoseel servo besar (jika MG996R) |
+| 9 | **Active buzzer 5V** (`HIGH` = bunyi) | 1 | Greeting/deny sound (GPIO 2) |
 
 ---
 
@@ -26,6 +27,7 @@ Daftar komponen (bill of materials), kebutuhan daya, dan ringkasan pin. Wiring d
 |-------|----------|---------|
 | **3.3V** (dari ESP32) | 3.3V | Button BUKA, HC-SR04 ×2, MFRC522 RC522 |
 | **5V** (dari ESP32/eksternal) | 5V | Servo (SG90 bisa 5V dari board; MG996R → power eksternal) |
+| **3.3V / 5V** | sesuai modul | Active buzzer (lihat spesifikasi; GPIO 2 aktif-HIGH) |
 | **GND** | 0V | Bersama semua perangkat |
 
 > **PENTING:**
@@ -53,6 +55,7 @@ Daftar komponen (bill of materials), kebutuhan daya, dan ringkasan pin. Wiring d
 | RFID SS (SDA) | 25 | SPI bit-bang | Chip select |
 | RFID RST | 27 | Output | Reset reader |
 | RFID IRQ | — | — | Tidak dipakai (mode polling) |
+| **Buzzer SIG** | **2** | Output (LEDC ch 7) | Greeting/deny; aktif-HIGH. GPIO 2 = juga LED onboard DOIT |
 | GPIO 1 / 3 | TX0 / RX0 | — | USB-Serial (upload & monitor) |
 
 ---

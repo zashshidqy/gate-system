@@ -1,8 +1,9 @@
-# Konfigurasi Sistem (`lib/config/config.h`)
+# Konfigurasi Sistem (`src/entry/config.h` + `src/exit/config.h`)
 
 **Satu-satunya tempat** untuk mengubah pin & perilaku sistem tanpa menyentuh logika lain.
 
-Sumber: `lib/config/config.h`
+Sumber: `src/entry/config.h` (unit Entry) dan `src/exit/config.h` (unit Exit).
+Kedua file hampir identik; bedanya Exit tidak punya `TRIG_PIN`/`ECHO_PIN` (sensor approach).
 
 ---
 
@@ -17,6 +18,11 @@ Sumber: `lib/config/config.h`
 | `RST_PIN` | `27` | RFID RST |
 | `SS_PIN` | `25` | RFID chip select (SDA) |
 | `RFID_SCK` / `RFID_MISO` / `RFID_MOSI` | `15` / `16` / `17` | SPI bit-bang RFID |
+| `BUZZER_PIN` | `2` | Buzzer (greeting/deny sound); `-1` = nonaktif |
+| `BUZZER_LEDC_CH` | `7` | Kanal LEDC buzzer (terpisah dari servo) |
+
+> `BUZZER_PIN 2` adalah juga LED biru onboard (DOIT DevKit V1) — ikut berkedip saat bunyi.
+> Setel `-1` jika modul buzzer tidak dipasang.
 
 > Setelah mengubah pin, periksa dulu pin yang TIDAK dipakai di `docs/wiring.md` (bagian
 > "Pin TIDAK RECOMMENDED") — mis. GPIO 6–11 (flash), 0/2/12 (boot), 34–39 (input-only).
@@ -42,7 +48,7 @@ kendaraan; terlalu kecil = kendaraan berhenti terlalu dekat/jauh sehingga `V:YES
 
 | Define | Nilai | Efek |
 |--------|-------|------|
-| `AUTO_CLOSE_MS` | `10000` | Fallback: gate otomatis siap tutup 10s setelah terbuka penuh |
+| `AUTO_CLOSE_MS` | *(dihapus)* | **Tidak ada auto-close** — gate boleh lama terbuka; tutup hanya setelah kendaraan lewat sensor exit (`passCleared`) atau perintah `C` |
 | `STEP_DELAY_MS` | `15` | Interval per-step gerak servo (non-blocking) |
 | `DEBOUNCE_MS` | `50` | Interval sampling button |
 | `DIST_INTERVAL_MS` | `150` | Interval pembacaan sensor depan+exit |
@@ -87,6 +93,7 @@ terlalu besar → buka/tutup terasa lambat. 15ms (≈6°/tick dari 75° travel �
 
 ## 6. Ringkasan Alur Ubah Nilai
 
-1. Edit `lib/config/config.h`.
-2. Build & upload: `pio run -t upload --upload-port /dev/ttyUSB0` (tutup GUI serial dulu).
+1. Edit `src/entry/config.h` (unit Entry) / `src/exit/config.h` (unit Exit).
+2. Build & upload: `pio run -e esp32doit-devkit-v1 -e esp32-exit` lalu
+   `pio run -e <env> -t upload --upload-port /dev/ttyUSB0` (tutup GUI serial dulu).
 3. Verifikasi lewat `ST|...` (monitor / GUI).

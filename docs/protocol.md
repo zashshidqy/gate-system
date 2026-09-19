@@ -47,6 +47,10 @@ ST|CLOSED|105|-1|0|Gate: CLOSED    |V:NO  ---|-|-1|0x00|-|-|0
 | `OPENING...` / `CLOSING...` | Gate sedang bergerak |
 | `V:YES 12cm` / `V:NO ---` | Status deteksi default |
 
+> **Tanpa auto-close:** gate yang sudah terbuka (`OPEN`) tetap terbuka selama yang diminta —
+> tutup hanya terjadi setelah kendaraan melewati sensor exit (`VEHICLE PASSED!` → `passCleared`)
+> atau perintah `C` (close) dikirim dari GUI.
+
 ---
 
 ## 2. Perintah PC → ESP32
@@ -86,8 +90,7 @@ Satu karakter per perintah (tanpa `\n` wajib, tanpa balasan di luar log).
 | `> [rfid] TAP TIMEOUT ...` | Kartu sah tapi 30s tanpa kendaraan → batal |
 | `> [rfid] DENIED — kartu tidak terotorisasi` | Kartu tidak ada di daftar |
 | `> GATE OPEN` | Sequence buka dimulai |
-| `> Auto-close armed` | Timer fallback 10s aktif |
-| `> Vehicle passed - close armed` | Sensor exit → kendaraan lewat → siap tutup cepat |
+| `> Vehicle passed - close armed` | Sensor exit → kendaraan lewat → siap tutup |
 | `> GATE CLOSING` / `> GATE CLOSED` | Sequence tutup |
 | `> OBSTACLE! Reopen` | Halangan `< 15cm` saat menutup → buka kembali |
 | `> NO VEHICLE - rejected` | Buka ditolak |

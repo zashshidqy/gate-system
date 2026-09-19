@@ -5,6 +5,27 @@
 
 ## Log
 
+### 2026-09-14 — Add-on: Capture Saat Tap, Database, Greeting Sound, Tanpa Auto-Close
+Semua 4 poin di `docs/add-on.md` selesai (`RFID_ENABLED`, buzzer, gate_db, simulator).
+
+**Firmware (Entry & Exit — `pio run` 2 env SUCCESS):**
+- **Greeting sound** — lib `lib/buzzer/` (non-blocking) + `BUZZER_PIN` (GPIO 2, LEDC ch 7):
+  kartu sah + kendaraan → `greet()`; kartu asing → `deny()`. Pin/config di
+  `src/entry/config.h` + `src/exit/config.h` (`BUZZER_PIN 2`, `BUZZER_LEDC_CH 7`).
+- **Tanpa auto-close** — `AUTO_CLOSE_MS` dibuang; gate boleh terbuka lama; tutup hanya
+  setelah kendaraan lewat sensor pass (`passCleared`) atau perintah `C` manual.
+- **Simulator** `sim/gate_sim.py`: state sensor **exit** (pass/cleared), tombol "Tutup Manual",
+  selftest **18 cek ALL PASS**; GUI tanpa auto-close.
+
+**Simulator/GUI add-on:**
+- **DB akses** — `sim/passage_log.py` (SQLite `data/gate.db`, gambar `data/captures/`):
+  `PassageLog.record()`, `recent()`, `count()`, `clear()`, `save_image()`; selftest ALL PASS.
+- **Capture saat tap RFID** — GUI `sim/gate_serial_gui.py`: deteksi GRANTED/DENIED dari `ST|`,
+  dialog `CaptureDialog` (preview kamera + **input plat** + arah ENTRY/EXIT) → gambar disimpan
+  + baris DB; metode `_grab_latest_frame`, `_record_passage`, `_on_rfid_granted/denied`.
+- **Greeting sound di GUI** — `_play_greeting()`/`_play_deny()` via aplay/paplay/play (fallback bell);
+  ANPR pakai API `PaddleOCR` lazy-load (`available()` pakai `find_spec`).
+
 ### 2026-09-09 — Live Kamera + Deteksi Kotak di GUI
 - Panel **Kamera (langsung)** di GUI: video real-time dari webcam (~30fps, thread terpisah)
 - **Kotak deteksi** digambar di video: segmen pengisi plat (hijau) vs teks lain (kuning)

@@ -2,12 +2,14 @@
 
 void StatusReport::buildRows(GateController& gate, const RfidReader& rfid,
                              unsigned long authUntilMs, bool authResult,
-                             bool authPending) {
+                             bool authPending, bool platePending) {
   unsigned long now = millis();
   snprintf(lcdRow1, sizeof(lcdRow1), "Gate: %-10s", gate.stateName());
 
   const char* msg = nullptr;
-  if (now < gate.rejectUntilMs) {
+  if (platePending) {
+    msg = "VALIDASI PLAT...";
+  } else if (now < gate.rejectUntilMs) {
     msg = "NO VEHICLE!";
   } else if (authPending) {
     msg = "TUNGGU KENDARAAN MASUK";
@@ -36,13 +38,13 @@ void StatusReport::buildRows(GateController& gate, const RfidReader& rfid,
 
 void StatusReport::send(GateController& gate, const RfidReader& rfid,
                         unsigned long authUntilMs, bool authResult, char lastAuth,
-                        bool authPending) {
+                        bool authPending, bool platePending) {
   char masterList[128];
   rfid.masterListHex(masterList, sizeof(masterList));
   char lastUidHex[21];
   rfid.lastUidHex(lastUidHex, sizeof(lastUidHex));
 
-  buildRows(gate, rfid, authUntilMs, authResult, authPending);
+  buildRows(gate, rfid, authUntilMs, authResult, authPending, platePending);
 
   Serial.print("ST|");
   Serial.print(gate.stateName());

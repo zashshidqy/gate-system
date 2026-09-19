@@ -70,6 +70,7 @@ void GateController::loopMotion() {
       return;
     }
   } else if (state == CLOSING) {
+#if !GATE_MODE_EXIT
     float cm = front.getCm();
     if (cm >= 0 && cm < OBSTACLE_CM) {
       Serial.println("> OBSTACLE! Reopen");
@@ -78,6 +79,7 @@ void GateController::loopMotion() {
       state = OPENING;
       return;
     }
+#endif
     if (!stepServo()) {
       state = CLOSED;
       Serial.println("> GATE CLOSED");
@@ -88,6 +90,14 @@ void GateController::loopMotion() {
 
 bool GateController::openGate() {
   if (state == OPEN || state == OPENING) return false;
+#if GATE_MODE_EXIT
+  // Unit EXIT — tidak ada sensor approach: buka langsung saat diminta
+  // (tap RFID valid / button / serial 'O'). Gate selalu standby tertutup.
+  Serial.println("> GATE OPEN (exit)");
+  beginServoMove(POS_OPEN);
+  state = OPENING;
+  return true;
+#else
   if (!front.isNear()) {
     Serial.println("> NO VEHICLE - rejected");
     rejectUntilMs = millis() + MSG_DURATION_MS;
@@ -97,6 +107,7 @@ bool GateController::openGate() {
   beginServoMove(POS_OPEN);
   state = OPENING;
   return true;
+#endif
 }
 
 void GateController::closeGate() {

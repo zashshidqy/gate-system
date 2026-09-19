@@ -1,28 +1,73 @@
 #include <Arduino.h>
+#include <Preferences.h>
 #include "config.h"
 #include "Ultrasonic.h"
 #include "RfidReader.h"
 #include "GateController.h"
 #include "StatusReport.h"
+#include "Buzzer.h"
 
 // ============================================================
-//  MAIN — hanya orkestrasi. Logika di lib/ per komponen:
-//   - config            : pin & konstanta
-//   - ultrasonic        : kelas USSensor (depan & exit)
-//   - rfid_reader       : daftar kartu terotorisasi (multi-master, NVS)
-//   - gate_controller   : state machine + gerak servo + logika pass
-//   - status_report     : baris display + protokol ST ke GUI
+//  MAIN — UNIT EXIT (gerbang keluar)
+//  Logika di lib/ per komponen.
+//
+//  Khusus EXIT:
+//   - Tanpa sensor approach; hanya sensor pass (GPIO 32/33).
+//   - Gate selalu standby TERTUTUP.
+//   - Buka langsung dari tap RFID / button / serial 'O'
+//     (tanpa syarat "kendaraan dekat").
+//   - Tutup kembali setelah kendaraan lewat (passCleared) atau perintah 'C'.
+//     TANPA auto-close — gate boleh lama terbuka.
 // ============================================================
 
 GateController gate;
 RfidReader rfid;
 StatusReport ui;
+Buzzer buzzer;
 
 unsigned long authUntilMs = 0;
 bool authResult = false;
-char lastAuth = '-';          // 'G'=granted 'D'=denied 'A'=jadi master 'P'=tunggu kendaraan
-bool authPending = false;     // kartu sah tapi belum ada kendaraan
-unsigned long pendingUntilMs = 0;
+char lastAuth = '-';          // 'G'=granted 'D'=denied 'A'=jadi master
+bool authPending = false;     // selalu false di EXIT (tidak ada tunggu kendaraan)
+
+void sensorDiag() {
+  Serial.printf("> [diag] Sensor PASS EXIT — scale=%.3f\n", gate.exit.getScale());
+  Serial.println("> [diag] raw echo + jarak — 8 baca tiap 400ms, letakkan objek di depan sensor:");
+  for (int i = 0; i < 8; i++) {
+    gate.exit.update();
+    Serial.printf("> [diag] P: raw=%uus cm=%d near=%d\n",
+                  gate.exit.rawUs(), (int)gate.exit.getCm(), gate.exit.isNear() ? 1 : 0);
+    delay(400);
+  }
+  Serial.println("> [diag] Selesai — 0us/raw = sensor tidak membalas echo (cek wiring TRIG/ECHO).");
+}
+
+void calibrateSensor(USSensor& s, const char* name, const char* key, int knownCm) {
+  Serial.printf("> [kal] %s: PASTIKAN objek tepat %dcm dari sensor — mengukur 10 sampel...\n", name, knownCm);
+  float sum = 0;
+  int n = 0;
+  for (int i = 0; i < 10; i++) {
+    s.update();
+    float cm = s.getCm();
+    if (cm >= 2) { sum += cm; n++; }
+    delay(200);
+  }
+  float avg = (n > 0) ? (sum / n) : -1;
+  if (avg < 2) {
+    Serial.println("> [kal] GAGAL — tidak ada pembacaan valid (cek wiring / objek terlalu jauh).");
+    return;
+  }
+  float scale = (float)knownCm / avg;
+  if (scale < 0.5f) scale = 0.5f;
+  if (scale > 2.0f) scale = 2.0f;
+  s.setScale(scale);
+  Preferences prefs;
+  prefs.begin("hcsr", false);
+  prefs.putFloat(key, scale);
+  prefs.end();
+  Serial.printf("> [kal] %s: rata2=%.1fcm, scale=%.3f -> sekarang terbaca %.1fcm. Tersimpan.\n",
+                name, avg, scale, avg * scale);
+}
 
 void handleSerialCommands() {
   while (Serial.available()) {
@@ -48,38 +93,60 @@ void handleSerialCommands() {
       rfid.runAudit();
     } else if (c == 'T') {
       rfid.tapTest();
+    } else if (c == 'S') {
+      sensorDiag();
+    } else if (c == 'K') {
+      int dist = 0;
+      while (Serial.available()) {
+        char d = Serial.peek();
+        if (d >= '0' && d <= '9') { dist = dist * 10 + (d - '0'); Serial.read(); }
+        else break;
+      }
+      if (dist <= 0) {
+        Serial.println("> [kal] Format: K<jarak> PASS (cm). Contoh: K80");
+      } else {
+        calibrateSensor(gate.exit, "PASS", "pass_scale", dist);
+      }
     }
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  Serial.printf("> UNIT: EXIT\n");
   Serial.printf("> CHIP: %s flash=%uKB psram=%s (%uKB)\n",
                 ESP.getChipModel(), ESP.getFlashChipSize() / 1024,
                 psramFound() ? "YES" : "no", ESP.getPsramSize() / 1024);
 
   gate.begin();
-  gate.front.begin(TRIG_PIN, ECHO_PIN);
-  gate.exit.begin(TRIG2_PIN, ECHO2_PIN);
+  gate.exit.begin(TRIG2_PIN, ECHO2_PIN);   // hanya sensor pass
+  gate.exit.setNearCm(PASS_VEHICLE_CM);
+  {
+    Preferences prefs;
+    prefs.begin("hcsr", true);
+    gate.exit.setScale(prefs.getFloat("pass_scale", 1.0f));
+    prefs.end();
+    Serial.printf("> Kalibrasi PASS: x%.3f\n", gate.exit.getScale());
+  }
   pinMode(BTN_OPEN, INPUT);
 
+  buzzer.begin();
   rfid.begin();
 #if RFID_ENABLED
   rfid.printInitReport();
   if (!rfid.isMasterSet()) {
-    Serial.println("> Tempel kartu pertama sebagai master (atau kirim 'A' lalu tempel).");
+    Serial.println("> Tempel kartu pertama sebagai master EXIT (atau kirim 'A' lalu tempel).");
   }
 #else
   Serial.println("RFID masked - open via button (GPIO4)");
 #endif
 
-  Serial.println("Gate ready - CLOSED");
-  ui.send(gate, rfid, authUntilMs, authResult, lastAuth, authPending);
+  Serial.println("Gate EXIT ready - CLOSED");
+  ui.send(gate, rfid, authUntilMs, authResult, lastAuth, authPending, false);
 }
 
 void loop() {
   static bool prevOpen = false;
-  static bool prevFrontNear = false;
   static bool prevExitNear = false;
   static unsigned long lastDistMs = 0;
   static unsigned long lastMoveMs = 0;
@@ -90,21 +157,17 @@ void loop() {
   static unsigned long rfidSkipUntil = 0;
 #endif
 
-  // ---- sensor + log perubahan status (depan & exit) ----
+  buzzer.update();
+
+  // ---- sensor pass saja + log perubahan status ----
   if (millis() - lastDistMs >= DIST_INTERVAL_MS) {
     lastDistMs = millis();
-    gate.front.update();
-    gate.exit.update();   // dibaca berurutan setelah sensor depan (hindari crosstalk)
+    gate.exit.update();
 
-    bool fn = gate.front.isNear();
-    if (fn != prevFrontNear) {
-      prevFrontNear = fn;
-      Serial.printf("> [sensor] ENTRY %s (%dcm)\n", fn ? "V:YES" : "V:NO", (int)gate.front.getCm());
-    }
     bool en = gate.exit.isNear();
     if (en != prevExitNear) {
       prevExitNear = en;
-      Serial.printf("> [sensor] EXIT %s (%dcm)\n", en ? "V:YES" : "V:NO", (int)gate.exit.getCm());
+      Serial.printf("> [sensor] PASS %s (%dcm)\n", en ? "V:YES" : "V:NO", (int)gate.exit.getCm());
     }
     gate.updatePass();
   }
@@ -119,16 +182,15 @@ void loop() {
     }
 
     if (millis() < rfidSkipUntil) {
-      // jeda singkat setelah baca gagal — hindari scan boros saat objek aneh
       rfid.clearCooldown();
     } else {
       bool any = rfid.cardPresent();
       if (!any) {
-        rfid.clearCooldown();   // area kosong → tap berikutnya langsung diproses
+        rfid.clearCooldown();
       }
 
       if (rfid.activeMode() == 1) {
-        // MODE TAMBAH — kartu berikutnya didaftarkan
+        // MODE TAMBAH
         if (any && rfid.tryReadCard()) {
           if (rfid.seenRecently()) { rfid.haltCurrent(); }
           else {
@@ -144,7 +206,7 @@ void loop() {
           Serial.println("> [rfid] kartu terdeteksi tapi gagal dibaca — geser/ulang kartu");
         }
       } else if (rfid.activeMode() == 2) {
-        // MODE HAPUS — kartu berikutnya dihapus dari daftar
+        // MODE HAPUS
         if (any && rfid.tryReadCard()) {
           if (rfid.seenRecently()) { rfid.haltCurrent(); }
           else {
@@ -169,7 +231,7 @@ void loop() {
             lastAuth = added ? 'A' : 'D';
             authUntilMs = millis() + RAUTH_DURATION_MS;
             if (added) {
-              Serial.println("> Kartu pertama DITETAPKAN sebagai master!");
+              Serial.println("> Kartu pertama DITETAPKAN sebagai master EXIT!");
               Serial.println("> (tambah kartu lain: kirim 'A' lalu tempel)");
             }
           }
@@ -178,7 +240,7 @@ void loop() {
           Serial.println("> [rfid] kartu terdeteksi tapi gagal dibaca — geser/ulang kartu");
         }
       } else if (any) {
-        // Kartu terotorisasi? Kalau sah → wajib ada kendaraan (sensor ENTRY).
+        // Kartu terotorisasi → buka langsung (tanpa syarat kendaraan dekat).
         if (rfid.tryReadCard()) {
           if (rfid.seenRecently()) {
             rfid.haltCurrent();
@@ -186,27 +248,20 @@ void loop() {
             rfid.noteProcessedFromCurrent();
             bool ok = rfid.currentCardAuthorized();
             if (ok) {
-              if (gate.isVehicleNear()) {
-                authResult = true;
-                lastAuth = 'G';
-                authUntilMs = millis() + RAUTH_DURATION_MS;
-                authPending = false;
-                Serial.println("> [rfid] ACCEPTED — kendaraan terdeteksi, gerbang dibuka");
-                gate.openGate();
-              } else {
-                authPending = true;
-                pendingUntilMs = millis() + WAIT_VEHICLE_MS;
-                lastAuth = 'P';
-                authUntilMs = 0;
-                authResult = false;
-                Serial.println("> [rfid] ACCEPTED — MENUNGGU KENDARAAN (sensor entry)...");
-              }
+              authResult = true;
+              lastAuth = 'G';
+              authUntilMs = millis() + RAUTH_DURATION_MS;
+              authPending = false;
+              Serial.println("> [rfid] ACCEPTED — gerbang exit dibuka");
+              buzzer.greet();
+              gate.openGate();
             } else {
               authResult = false;
               lastAuth = 'D';
               authUntilMs = millis() + RAUTH_DURATION_MS;
               authPending = false;
               Serial.println("> [rfid] DENIED — kartu tidak terotorisasi");
+              buzzer.deny();
             }
           }
         } else {
@@ -214,24 +269,6 @@ void loop() {
           Serial.println("> [rfid] kartu terdeteksi tapi gagal dibaca — geser/ulang kartu");
         }
       }
-    }
-  }
-
-  // Resolusi tunggu-kendaraan: begitu sensor ENTRY V:YES → buka gerbang.
-  if (authPending) {
-    if (gate.isVehicleNear()) {
-      authPending = false;
-      authResult = true;
-      lastAuth = 'G';
-      authUntilMs = millis() + RAUTH_DURATION_MS;
-      Serial.println("> [rfid] KENDARAAN DETEKSI — kartu sah, gerbang dibuka");
-      gate.openGate();
-    } else if (millis() >= pendingUntilMs) {
-      authPending = false;
-      authResult = false;
-      lastAuth = 'D';
-      authUntilMs = millis() + RAUTH_DURATION_MS;
-      Serial.println("> [rfid] TAP TIMEOUT — tidak ada kendaraan, scan dibatalkan");
     }
   }
 #endif
@@ -253,24 +290,24 @@ void loop() {
     prevOpen = openPressed;
   }
 
-  // Saat terbuka: tutup jika diminta DAN kendaraan sudah lewat
+  // Saat terbuka: tutup hanya jika kendaraan SUDAH lewat (sensor pass passCleared)
+  // ATAU diminta manual ('C' dari GUI). TANPA auto-close — gate boleh lama terbuka
+  // selama kendaraan belum melewati sensor exit.
+  // Tanpa sensor approach → tanpa cek isVehicleNear().
   if (gate.isOpen()) {
     if (!gate.closeRequested) {
-      if (millis() - gate.openSinceMs >= AUTO_CLOSE_MS) {
-        gate.closeRequested = true;
-        Serial.println("> Auto-close armed");
-      } else if (gate.passCleared) {
+      if (gate.passCleared) {
         gate.closeRequested = true;
         Serial.println("> Vehicle passed - close armed");
       }
     }
-    if (gate.closeRequested && !gate.isVehicleNear()) {
+    if (gate.closeRequested) {
       gate.closeGate();
     }
   }
 
   if (millis() - lastStatusMs >= SERIAL_STATUS_MS) {
     lastStatusMs = millis();
-    ui.send(gate, rfid, authUntilMs, authResult, lastAuth, authPending);
+    ui.send(gate, rfid, authUntilMs, authResult, lastAuth, authPending, false);
   }
 }

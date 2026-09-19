@@ -12,10 +12,12 @@ class PlateOCR:
         self._win = []
 
     def available(self):
+        # find_spec TIDAK mengeksekusi modul → tidak ada import berat paddle
+        # saat GUI start (menghindari race/abort dengan thread kamera).
         try:
-            import paddleocr  # noqa: F401
-            return True
-        except ImportError:
+            import importlib.util
+            return importlib.util.find_spec("paddleocr") is not None
+        except Exception:
             return False
 
     def available_message(self):

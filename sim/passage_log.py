@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS passages (
     image_path TEXT,             -- path gambar capture / NULL
     note TEXT                    -- keterangan / NULL
 );
+CREATE INDEX IF NOT EXISTS idx_passages_ts ON passages(ts);
+CREATE INDEX IF NOT EXISTS idx_passages_method ON passages(method);
 """
 
 
@@ -43,8 +45,12 @@ class PassageLog:
     def open(self):
         import sqlite3
         self._conn = sqlite3.connect(str(self.db_path))
-        self._conn.execute(SCHEMA)
-        self._conn.commit()
+        self._conn.executescript(SCHEMA)
+        # WAL: baca & tulis aman berbarengan (kamera/ANPR menulis di thread)
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            pass
 
     def close(self):
         if self._conn is not None:
@@ -90,13 +96,28 @@ class PassageLog:
         return cur.lastrowid
 
     # ------------------------------------------------------------ query
-    def recent(self, n=50):
+    def recent(self, n=50, method=None, allowed=None, q=None):
+        """n catatan terakhir, bisa difilter (method / allowed / kata kunci)."""
         if self._conn is None:
             self.open()
-        rows = self._conn.execute(
-            "SELECT id, ts, direction, method, uid, plate, allowed,"
-            " image_path, note FROM passages ORDER BY id DESC LIMIT ?",
-            (n,)).fetchall()
+        sql = ("SELECT id, ts, direction, method, uid, plate, allowed,"
+               " image_path, note FROM passages")
+        conds, args = [], []
+        if method:
+            conds.append("method = ?")
+            args.append(method)
+        if allowed is not None:
+            conds.append("allowed = ?")
+            args.append(1 if allowed else 0)
+        if q:
+            conds.append("(uid LIKE ? OR plate LIKE ? OR note LIKE ?)")
+            like = "%" + q + "%"
+            args += [like, like, like]
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(n)
+        rows = self._conn.execute(sql, args).fetchall()
         cols = ("id", "ts", "direction", "method", "uid", "plate",
                 "allowed", "image_path", "note")
         return [dict(zip(cols, r)) for r in rows]

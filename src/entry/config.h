@@ -28,9 +28,9 @@
 #define RFID_MOSI 17
 
 // ---- Sensor ----
-#define VEHICLE_CM 50      // kendaraan "dekat" jika <= 50cm (approach ENTRY)
-#define PASS_VEHICLE_CM 80 // kendaraan "lewat" jika <= 80cm (sensor pass)
-#define MAX_VALID_CM 200    // baca di atas ini = noise/jauh, anggap tidak ada objek
+#define VEHICLE_CM 20      // kendaraan "dekat" jika <= 50cm (approach ENTRY)
+#define PASS_VEHICLE_CM 20 // kendaraan "lewat" jika <= 80cm (sensor pass)
+#define MAX_VALID_CM 100    // baca di atas ini = noise/jauh, anggap tidak ada objek
 #define NEAR_COUNT 3        // butuh N baca berurutan dekat sebelum V:YES
 #define OBSTACLE_CM 10      // halangan saat menutup (<10cm)
 

@@ -32,9 +32,9 @@ Per unit:
 | Servo SIG | GPIO 18 | Output (LEDC) | PWM servo |
 | Button BUKA | GPIO 4 | Input (OUT) | Active-HIGH saat ditekan (cadangan) |
 | HC-SR04 #1 TRIG (approach) | GPIO 13 | Output | Trigger sensor approach (kendaraan menunggu) |
-| HC-SR04 #1 ECHO (approach) | GPIO 14 | Input | Echo sensor approach (3.3V) |
+| HC-SR04 #1 ECHO (approach) | GPIO 14 | Input | Echo sensor approach (via divider 1k+2k → 3.3V) |
 | HC-SR04 #2 TRIG (pass) | **GPIO 32** | **Output** | Trigger sensor "kendaraan sudah lewat" |
-| **HC-SR04 #2 ECHO (pass)** | **GPIO 33** | **Input** | Echo sensor pass (3.3V) |
+| **HC-SR04 #2 ECHO (pass)** | **GPIO 33** | **Input** | Echo sensor pass (via divider 1k+2k → 3.3V) |
 | RFID SCK | GPIO 15 | SPI | Clock RFID RC522 |
 | RFID MISO | GPIO 16 | SPI | Respond dari reader |
 | RFID MOSI | GPIO 17 | SPI | Perintah ke reader |
@@ -52,7 +52,7 @@ Per unit:
 | Servo SIG | GPIO 18 | Output (LEDC) | PWM servo |
 | Button BUKA | GPIO 4 | Input (OUT) | Active-HIGH (opsional, cadangan) |
 | HC-SR04 #2 TRIG (pass) | GPIO 32 | Output | Trigger sensor "kendaraan sudah lewat" |
-| HC-SR04 #2 ECHO (pass) | GPIO 33 | Input | Echo sensor pass (3.3V) |
+| HC-SR04 #2 ECHO (pass) | GPIO 33 | Input | Echo sensor pass (via divider 1k+2k → 3.3V) |
 | RFID SCK | GPIO 15 | SPI | Clock RFID RC522 |
 | RFID MISO | GPIO 16 | SPI | Respond dari reader |
 | RFID MOSI | GPIO 17 | SPI | Perintah ke reader |
@@ -63,9 +63,18 @@ Per unit:
 ### Power / Ground
 | Jalur | Tujuan |
 |-------|--------|
-| 3.3V | VCC Button Buka, **VCC HC-SR04 x2**, VCC RFID RC522 |
-| 5V | Servo VCC (atau power eksternal) |
+| 3.3V | VCC Button Buka, VCC RFID RC522 |
+| 5V | Servo VCC (atau power eksternal) + **VCC HC-SR04 x2** |
 | GND | Servo, Button Buka, HC-SR04 x2, RFID RC522 |
+
+> **HC-SR04 kini disupply 5V** (bukan 3.3V) — modul dirancang untuk 5V, jangkauan & akurasi
+> sesuai desain. Pin **ECHO (5V) TIDAK boleh langsung ke GPIO ESP32** → wajib **voltage divider 1k+2k**:
+> `ECHO ──[1k]──▶ GPIO ──[2k]──▶ GND` → GPIO menerima ±3.33V (aman).
+> **TRIG tetap 3.3V** dari GPIO (threshold modul ~1.5V → sudah terbaca HIGH).
+>
+> **Daya:** kalau pakai servo besar (MG996R, arus hingga 2A+ saat gerak), jangan letakkan VCC
+> HC-SR04 di jalur/regulator yang sama dengan motor servo — voltage sag saat gate bergerak bisa
+> bikin trigger/echo timing kacau. Gunakan power eksternal 5V untuk servo, GND tetap bersama.
 
 ---
 
@@ -75,8 +84,8 @@ Per unit:
 ```
            [ + ] = 3.3V      [ + ] = 5V
 ESP32 ──────────────────────── breadboard
- 3.3V ──rel (+) kiri ──→ VCC button + VCC kedua HC-SR04 + VCC RFID
- 5V   ──rel (+) kanan──→ VCC servo
+ 3.3V ──rel (+) kiri ──→ VCC button + VCC RFID
+ 5V   ──rel (+) kanan──→ VCC servo + VCC kedua HC-SR04
  GND  ──rel (-) ───────→ GND semua
 ```
 
@@ -97,24 +106,34 @@ OUT         → GPIO 4
 ```
 
 ### HC-SR04 #1 — Sensor Approach (kendaraan menunggu di depan palang) — **hanya Unit Entry**
-> **PENTING:** kedua HC-SR04 disupply **3.3V** agar ECHO mengeluarkan ±3.3V dan **aman ke ESP32
-> tanpa resistor**. (Kalau disupply 5V, wajib pakai voltage divider di ECHO.)
+> **PENTING:** HC-SR04 disupply **5V** agar jangkauan & akurasi sesuai desain modul. Karena ECHO
+> mengeluarkan 5V, **wajib voltage divider 1k+2k** sebelum GPIO (lihat diagram).
 > Unit Exit **tidak** memasang sensor ini — GPIO 13/14 dibiarkan kosong.
 ```
 HC-SR04 #1     ESP32
-VCC          → 3.3V
+VCC          → 5V
 GND          → GND
 TRIG         → GPIO 13
-ECHO         → GPIO 14
+ECHO         ──[1k]──▶ GPIO 14
+                         │
+                       [2k]
+                         │
+                        GND
 ```
+> Divider menghasilkan 5V × 2k/(1k+2k) = **3.33V** di GPIO. TRIG 3.3V dari ESP32 langsung OK.
+> Gunakan 1k+2k (pasangan sama) per sensor — 10k dilarang (tegangan terlalu rendah).
 
 ### HC-SR04 #2 — Sensor Pass (kendaraan sudah lewat) — Entry & Exit
 ```
 HC-SR04 #2     ESP32
-VCC          → 3.3V
+VCC          → 5V
 GND          → GND
 TRIG         → GPIO 32
-ECHO         → GPIO 33
+ECHO         ──[1k]──▶ GPIO 33
+                         │
+                       [2k]
+                         │
+                        GND
 ```
 > Dipasang di **sisi belakang palang** (setelah gate ketika terbuka), menghadap area tempat
 > kendaraan melintas setelah lewat. Sensor approach & pass dibaca **bergantian** di kode
@@ -143,9 +162,10 @@ IRQ            → (tidak dipakai, abaikan)
 
 ## Pin yang TELAH DIPAKAI (Avoid)
 ```
+GPIO 2   → Buzzer (active, LEDC ch 7) — sekaligus LED biru onboard DOIT
 GPIO 4   → Button Buka
-GPIO 13  → HC-SR04 #1 ECHO (approach)
-GPIO 14  → HC-SR04 #1 TRIG (approach)
+GPIO 13  → HC-SR04 #1 TRIG (approach)
+GPIO 14  → HC-SR04 #1 ECHO (approach)
 GPIO 18  → Servo
 GPIO 32  → HC-SR04 #2 TRIG (pass)
 GPIO 33  → HC-SR04 #2 ECHO (pass)
@@ -174,12 +194,12 @@ GPIO 5, 19, 21, 22, 26
 ---
 
 ## Logika / Status
-- **Sensor approach (HC-SR04 #1) — Unit Entry saja:** deteksi kendaraan "dekat" (`≤ VEHICLE_CM` 30cm) → syarat agar gate boleh buka.
-- **Sensor pass (HC-SR04 #2) — Entry & Exit:** kendaraan terdeteksi lewat area palang lalu kosong → `passCleared` → gate boleh **menutup lebih cepat** (tanpa menunggu 10 detik penuh).
-- **Unit Exit:** tanpa approach → **selalu standby tertutup**; buka langsung dari tap RFID / button (tanpa syarat "kendaraan dekat"); tutup setelah `passCleared` atau auto-close.
+- **Sensor approach (HC-SR04 #1) — Unit Entry saja:** deteksi kendaraan "dekat" (`≤ VEHICLE_CM` **50cm**) → syarat agar gate boleh buka.
+- **Sensor pass (HC-SR04 #2) — Entry & Exit:** kendaraan terdeteksi lewat area palang lalu kosong → `passCleared` → gate boleh **menutup lebih cepat** (tanpa menunggu timeout).
+- **Unit Exit:** tanpa approach → **selalu standby tertutup**; buka langsung dari tap RFID / button (tanpa syarat "kendaraan dekat"); tutup setelah `passCleared` atau perintah `C`.
 - **Button BUKA (GPIO4):** cadangan manual → `openGate()`.
-- **Auto-close:** 10 detik (`AUTO_CLOSE_MS`) sebagai fallback jika sensor pass tidak mendeteksi lewatan.
-- **Proteksi halangan (Entry):** saat menutup, sensor approach `< OBSTACLE_CM` (15cm) → gate membuka kembali. *(Unit Exit tanpa approach → proteksi halangan nonaktif.)*
+- **Tanpa auto-close:** `AUTO_CLOSE_MS` sudah **dihapus** — gate boleh lama terbuka; tutup hanya setelah pass/sensor exit (`passCleared`) atau perintah `C`.
+- **Proteksi halangan (Entry):** saat menutup, sensor approach `< OBSTACLE_CM` (**10cm** di config.h) → gate membuka kembali. *(Unit Exit tanpa approach → proteksi halangan nonaktif.)*
 - Kartu RFID: kartu pertama saat boot = MASTER; provisioning kartu diulang di tiap unit (Entry & Exit).
 
 ---
@@ -199,8 +219,7 @@ GPIO 5, 19, 21, 22, 26
 
 - **Unit 1 (Entry):** 2 sensor (approach + pass). Kendaraan datang → approach + tap RFID → buka → pass → tutup cepat.
 - **Unit 2 (Exit):** 1 sensor (pass saja). **Selalu standby tertutup**; buka hanya via **tap RFID** (atau button) → kendaraan lewat → pass mendeteksi + kosong → tutup. Tanpa syarat "kendaraan dekat".
-- **Power per unit:** tiap unit punya suplai sendiri — 3.3V untuk sensor+RFID,
-  5V (atau eksternal) untuk servo, ground bersama dalam satu unit. Jangan disambung antar unit.
+- **Power per unit:** tiap unit punya suplai sendiri — 3.3V untuk button+RFID, 5V untuk servo + HC-SR04 (ECHO via divider 1k+2k), ground bersama dalam satu unit. Jangan disambung antar unit.
 - **Firmware** perlu pembedaan sisi (**ENTRY vs EXIT**) via konfigurasi: unit EXIT menonaktifkan
   sensor approach & syarat "vehicle near" saat buka.
 - **Provisioning kartu master** diulang per unit: tap kartu pertama saat boot (jadi master), atau
@@ -218,9 +237,11 @@ GPIO 5, 19, 21, 22, 26
 | (hari ini) | **Tambah HC-SR04 #2 (exit)** — TRIG=GPIO32, ECHO=GPIO33: deteksi kendaraan sudah lewat → tutup lebih cepat |
 | (hari ini) | Pin exit dipaksa di pojok header (32/33) agar tidak menabrak servo(18) & RFID |
 | (hari ini) | Hapus LCD (GPIO21/22) & Button TUTUP (GPIO5) dari firmware |
-| (hari ini) | Servo CLOSED=105°, OPEN=30°; gerak non-blocking (sensor/tombol/serial tetap responsif saat bergerak) |
+| (hari ini) | Servo CLOSED=120°, OPEN=30°; gerak non-blocking (sensor/tombol/serial tetap responsif saat bergerak) |
 | (hari ini) | RFID dimask (`RFID_ENABLED 0`) — modul RC522 tidak merespons, menunggu penggantian |
 | (hari ini) | RFID difungsikan lagi (`RFID_ENABLED 1`) — modul baru tetap `0x0`, diagnosa wiring/power/solder pin modul |
 | (hari ini) | **Greeting sound** — active buzzer (GPIO 2, LEDC ch 7) masuk BOM & wiring per unit; +section pemasangan |
 | (hari ini) | **Tanpa auto-close** — `AUTO_CLOSE_MS` dihapus; gate terbuka boleh lama, tutup hanya setelah pass/sensor exit |
 | (hari ini) | **Refactor modular** — kode dipecah per komponen di `lib/` (config, ultrasonic, rfid_reader, gate_controller, status_report); pin & konstanta pindah ke `lib/config/config.h` |
+| (hari ini) | **HC-SR04 pindah ke 5V + voltage divider 1k+2k di ECHO** (13/14 & 32/33) — jangkauan & akurasi sesuai desain modul; TRIG tetap 3.3V |
+| (hari ini) | **Audit ulang wiring** — perbaiki TRIG/ECHO (13=TRIG, 14=ECHO), tambah GPIO 2 (buzzer), sync `VEHICLE_CM=50` / `OBSTACLE_CM=10` / tanpa auto-close |

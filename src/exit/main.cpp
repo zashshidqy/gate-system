@@ -93,6 +93,11 @@ void handleSerialCommands() {
       rfid.runAudit();
     } else if (c == 'T') {
       rfid.tapTest();
+    } else if (c == 'H') {
+      // Tombol TIKET (dari GUI) — unit EXIT buka langsung tanpa syarat kendaraan.
+      Serial.println("> [tiket] Tombol Tiket EXIT — gerbang dibuka");
+      buzzer.greet();
+      gate.openGate();
     } else if (c == 'S') {
       sensorDiag();
     } else if (c == 'K') {

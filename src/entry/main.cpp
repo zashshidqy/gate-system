@@ -152,6 +152,15 @@ void handleSerialCommands() {
       rfid.runAudit();
     } else if (c == 'T') {
       rfid.tapTest();
+    } else if (c == 'H') {
+      // Tombol TIKET (dari GUI) — alternatif akses: tetap wajib ada kendaraan.
+      if (gate.isVehicleNear()) {
+        Serial.println("> [tiket] Tombol Tiket — gerbang dibuka");
+        buzzer.greet();
+        gate.openGate();
+      } else {
+        Serial.println("> [tiket] TIDAK ADA KENDARAAN — tiket diabaikan");
+      }
     } else if (c == 'S') {
       sensorDiag();
     } else if (c == 'K' || c == 'J') {

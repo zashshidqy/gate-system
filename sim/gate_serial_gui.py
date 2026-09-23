@@ -12,6 +12,8 @@ Jalankan:
 
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -27,6 +29,251 @@ from passage_log import PassageLog, ROOT
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+
+# ---- SUARA PROMPT (diputar di LAPTOP, bukan buzzer ESP32) ----
+# Skema ala gate asli (event -> pesan, bukan state machine):
+#   mobil kena approach       -> greet  "selamat datang"   loop
+#   tap berhasil (G)          -> thanks "terima kasih"     sekali, lalu journey
+#   gate terbuka (POST-G)     -> journey "silahkan masuk"  loop
+#   tap gagal (D)             -> retry  "silahkan coba lagi" loop
+# Berhenti saat: mobil keluar approach / gate CLOSED / event baru.
+# File dicari di data/sounds/ & sound/ (keyword nama file); pemutar
+# ffplay/paplay/aplay; fallback TTS espeak-ng (dicache).
+SOUND_DIR = os.path.join(str(ROOT), "data", "sounds")
+USER_SOUND_DIR = os.path.join(str(ROOT), "sound")
+AUDIO_EXTS = (".mp3", ".m4a", ".ogg", ".wav", ".aac", ".flac")
+
+# key -> (keyword nama file, teks TTS bila tidak ada file)
+SOUND_LIB = {
+    "greet":   ("selamat datang", "Selamat datang"),
+    "thanks":  ("terima kasih", "Terima kasih"),
+    "retry":   ("silahkan coba lagi", "Silahkan coba lagi"),
+    "journey": ("silahkan masuk", "Silahkan masuk"),
+}
+
+# jeda antar ulang (detik) — nyepam yang sopan seperti gate asli
+GREET_GAP = 3.0
+JOURNEY_GAP = 3.0
+RETRY_GAP = 3.0
+
+
+# cache file TTS yang sudah dibuat (hindari espeak-ng dipanggil berulang)
+_SOUND_PATH_CACHE = {}
+
+
+def _sound_path(key):
+    """Cari file audio pesan; bila tidak ditemukan, buat wav TTS (fallback)."""
+    kw, tts = SOUND_LIB[key]
+    for folder in (SOUND_DIR, USER_SOUND_DIR):
+        if not os.path.isdir(folder):
+            continue
+        for fn in sorted(os.listdir(folder)):
+            if not fn.lower().endswith(AUDIO_EXTS):
+                continue
+            if kw in os.path.splitext(fn)[0].lower():
+                return os.path.join(folder, fn)
+    wav = os.path.join(SOUND_DIR, key + ".wav")
+    if _SOUND_PATH_CACHE.get(wav):
+        return wav if os.path.exists(wav) else None
+    try:
+        os.makedirs(SOUND_DIR, exist_ok=True)
+        subprocess.run(["espeak-ng", "-v", "id", "-s", "140", "-p", "55",
+                        "-w", wav, tts],
+                       check=True, timeout=30, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        _SOUND_PATH_CACHE[wav] = True
+        return wav
+    except Exception:
+        return None
+
+
+def _play_cmd(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".wav" and shutil.which("paplay"):
+        return ["paplay", path]
+    if ext == ".wav" and shutil.which("aplay"):
+        return ["aplay", "-q", path]
+    if shutil.which("ffplay"):
+        return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path]
+    if shutil.which("paplay"):
+        return ["paplay", path]
+    return None
+
+
+class SoundEngine:
+    """Pemutar audio non-blocking, satu instance agar suara tidak bertumpuk.
+
+    - play_once(key)          : putar sekali.
+    - play_loop(key)          : putar berulang sampai diganti / dihentikan.
+    - play_chain(once, loop)  : putar file pertama sekali, lalu loop file kedua.
+    - stop_loops()            : matikan pesan yang sedang loop (greet/retry/journey).
+    """
+
+    GAP_S = 2.5
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._gen = 0
+        self._looping = False
+        self._key = None
+        self._proc = None
+
+    def play_once(self, key):
+        return self._start(key, loop=False)
+
+    def play_loop(self, key, gap=None):
+        return self._start(key, loop=True, gap=gap)
+
+    def play_chain(self, once_key, loop_key, loop_gap=None):
+        p1 = _sound_path(once_key)
+        p2 = _sound_path(loop_key)
+        if not p1 or not p2:
+            return False
+        if loop_gap is None:
+            loop_gap = self.GAP_S
+        with self._lock:
+            self._gen += 1
+            self._looping = True
+            self._key = loop_key
+            token = self._gen
+            p = self._proc
+            self._proc = None
+            if p is not None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+        threading.Thread(target=self._worker_chain,
+                         args=(token, p1, p2, loop_gap), daemon=True).start()
+        return True
+
+    def active_key(self):
+        with self._lock:
+            return self._key
+
+    def stop(self):
+        with self._lock:
+            self._gen += 1
+            self._looping = False
+            self._key = None
+            p = self._proc
+            self._proc = None
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
+    def stop_loops(self):
+        """Matikan pesan yang sedang loop; biarkan pesan once selesai."""
+        with self._lock:
+            if not self._looping:
+                return
+            self._gen += 1
+            self._looping = False
+            self._key = None
+            p = self._proc
+            self._proc = None
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+
+    def _start(self, key, loop, gap=None):
+        path = _sound_path(key)
+        if not path:
+            return False
+        if gap is None:
+            gap = self.GAP_S
+        with self._lock:
+            self._gen += 1
+            self._looping = loop
+            self._key = key if loop else None
+            token = self._gen
+            p = self._proc
+            self._proc = None
+            if p is not None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+        threading.Thread(target=self._worker,
+                         args=(token, path, loop, gap), daemon=True).start()
+        return True
+
+    def _run(self, path):
+        cmd = _play_cmd(path)
+        if not cmd:
+            return None
+        try:
+            return subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL)
+        except Exception:
+            return None
+
+    def _run_foreground(self, token, path):
+        """Putar satu file sampai habis. False bila dibatalkan (token berubah)."""
+        with self._lock:
+            if token != self._gen:
+                return False
+        p = self._run(path)
+        if p is None:
+            return False
+        dead = False
+        with self._lock:
+            if token != self._gen:
+                dead = True
+            else:
+                self._proc = p
+        if dead:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            return False
+        while p.poll() is None:
+            time.sleep(0.05)
+            with self._lock:
+                if token != self._gen:
+                    dead = True
+                    break
+        if dead:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        with self._lock:
+            if self._proc is p:
+                self._proc = None
+        return not dead
+
+    def _wait_gap(self, token, gap):
+        end = time.time() + gap
+        while time.time() < end:
+            time.sleep(0.05)
+            with self._lock:
+                if token != self._gen:
+                    return False
+        return True
+
+    def _worker(self, token, path, loop, gap):
+        while True:
+            if not self._run_foreground(token, path):
+                return
+            if not loop:
+                return
+            if not self._wait_gap(token, gap):
+                return
+
+    def _worker_chain(self, token, path_once, path_loop, loop_gap):
+        if not self._run_foreground(token, path_once):
+            return
+        while True:
+            if not self._run_foreground(token, path_loop):
+                return
+            if not self._wait_gap(token, loop_gap):
+                return
 
 AUTO_CLOSE_S = 10.0
 PLATE_VALIDATE_S = 14.0
@@ -53,27 +300,50 @@ def list_ports():
 
 
 class CaptureViewer:
-    """Jendela riwayat capture: thumbnail dari data/captures + info dari gate.db."""
+    """MENU HASIL CAPTURE — riwayat lengkap, database-driven (gate.db + data/captures).
+
+    Bukan berdampingan dengan kamera: jendela mandiri berisi galeri capture penuh,
+    filter (hasil/metode/cari), preview besar + metadata dari database.
+    """
     def __init__(self, master, plog):
         self.plog = plog
         self._photos = []
         self.win = tk.Toplevel(master)
-        self.win.title("Hasil Capture Kamera")
+        self.win.title("Menu Hasil Capture — riwayat (gate.db)")
         self.win.configure(bg=WIN_BG)
-        self.win.geometry("1000x600")
-        self.win.minsize(720, 460)
+        self.win.geometry("1180x720")
+        self.win.minsize(880, 560)
         self._build()
         self.refresh()
 
     def _build(self):
         top = tk.Frame(self.win, bg=WIN_BG)
         top.pack(fill="x", padx=10, pady=(10, 4))
-        tk.Label(top, text="Hasil Capture (data/captures) + riwayat access (gate.db)",
+        tk.Label(top, text="Menu Hasil Capture (database gate.db + data/captures)",
                  bg=WIN_BG, fg=TEXT, font=("DejaVu Sans", 11, "bold")).pack(side="left")
         self.lbl_count = tk.Label(top, text="", bg=WIN_BG, fg=MUTED,
                                   font=("DejaVu Sans", 9))
         self.lbl_count.pack(side="left", padx=10)
         ttk.Button(top, text="Segarkan", command=self.refresh).pack(side="right")
+
+        filt = tk.Frame(self.win, bg=WIN_BG)
+        filt.pack(fill="x", padx=10, pady=(0, 4))
+        tk.Label(filt, text="Hasil:", bg=WIN_BG, fg=MUTED,
+                 font=("DejaVu Sans", 9)).pack(side="left")
+        self.f_allowed = tk.StringVar(value="semua")
+        ttk.Combobox(filt, textvariable=self.f_allowed, state="readonly", width=8,
+                     values=("semua", "IZIN", "TOLAK")).pack(side="left", padx=(4, 12))
+        tk.Label(filt, text="Metode:", bg=WIN_BG, fg=MUTED,
+                 font=("DejaVu Sans", 9)).pack(side="left")
+        self.f_method = tk.StringVar(value="semua")
+        ttk.Combobox(filt, textvariable=self.f_method, state="readonly", width=8,
+                     values=("semua", "RFID", "ANPR", "MANUAL", "TIKET")).pack(side="left", padx=(4, 12))
+        tk.Label(filt, text="Cari (UID/plat):", bg=WIN_BG, fg=MUTED,
+                 font=("DejaVu Sans", 9)).pack(side="left")
+        self.f_q = tk.StringVar()
+        ent = ttk.Entry(filt, textvariable=self.f_q, width=28)
+        ent.pack(side="left", padx=(4, 6))
+        ent.bind("<Return>", lambda e: self.refresh())
 
         body = tk.Frame(self.win, bg=WIN_BG)
         body.pack(fill="both", expand=True, padx=10, pady=(2, 10))
@@ -106,8 +376,18 @@ class CaptureViewer:
         self.preview_lbl.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
         self.meta_lbl = tk.Label(right, text="", bg=CARD_BG, fg=MUTED,
                                  font=("DejaVu Sans Mono", 9), justify="left",
-                                 anchor="w", wraplength=380)
+                                 anchor="w", wraplength=400)
         self.meta_lbl.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+
+    def _filters(self):
+        allowed = None
+        if self.f_allowed.get() == "IZIN":
+            allowed = True
+        elif self.f_allowed.get() == "TOLAK":
+            allowed = False
+        method = None if self.f_method.get() == "semua" else self.f_method.get()
+        q = self.f_q.get().strip() or None
+        return method, allowed, q
 
     def refresh(self):
         for w in self._grid_f.winfo_children():
@@ -118,10 +398,11 @@ class CaptureViewer:
                      % getattr(self, "_plog_error", "?"), bg=CARD_BG, fg=ERR
                      ).pack(pady=20)
             return
-        rows = self.plog.recent(40)
-        self.lbl_count.config(text="%d catatan terakhir" % len(rows))
+        method, allowed, q = self._filters()
+        rows = self.plog.recent(60, method=method, allowed=allowed, q=q)
+        self.lbl_count.config(text="%d catatan terakhir (dari database)" % len(rows))
         if not rows:
-            tk.Label(self._grid_f, text="Belum ada capture.",
+            tk.Label(self._grid_f, text="Tidak ada capture yang cocok.",
                      bg=CARD_BG, fg=GRAY).pack(pady=20)
             return
         cols = 3
@@ -141,19 +422,20 @@ class CaptureViewer:
             try:
                 if path is not None:
                     im = Image.open(path)
-                    im.thumbnail((150, 112))
+                    im.thumbnail((170, 128))
                     photo = ImageTk.PhotoImage(im)
                     self._photos.append(photo)
                     img = tk.Label(card, image=photo, bg=CARD_BG, cursor="hand2")
                 else:
                     img = tk.Label(card, text="(tanpa foto)", bg=CARD_BG, fg=GRAY,
-                                   height=6, width=22)
+                                   height=7, width=24)
             except Exception:
                 img = tk.Label(card, text="(gambar rusak)", bg=CARD_BG, fg=ERR,
-                               height=6, width=22)
+                               height=7, width=24)
             img.pack(padx=4, pady=(4, 0))
-            txt = "%(ts)s\n%(method)s | %(uid)s\n%(plate)s\n%s" % (
-                r, "IZIN" if r["allowed"] else "TOLAK")
+            status = "IZIN" if r["allowed"] else "TOLAK"
+            txt = "%s\n%s | %s\n%s\n%s" % (r["ts"], r["method"], r["uid"],
+                                           r["plate"], status)
             tk.Label(card, text=txt, bg=CARD_BG, fg=TEXT,
                      font=("DejaVu Sans Mono", 8), justify="left").pack(
                 padx=4, pady=(0, 4))
@@ -164,7 +446,7 @@ class CaptureViewer:
         if path is not None and path.exists():
             try:
                 im = Image.open(path)
-                im.thumbnail((540, 430))
+                im.thumbnail((620, 480))
                 photo = ImageTk.PhotoImage(im)
                 self.preview_lbl.configure(image=photo, text="")
                 self.preview_lbl.image = photo
@@ -172,12 +454,13 @@ class CaptureViewer:
                 self.preview_lbl.configure(image="", text="Gagal buka: %s" % e)
         else:
             self.preview_lbl.configure(image="", text="(tidak ada foto)")
-        self.meta_lbl.config(text="%s\nMetode: %s\nArah: %s\nUID: %s\nPlat: %s\n"
-                             "Hasil: %s\ngate.db#%d"
+        self.meta_lbl.config(text="%s\nMetode: %s | Arah: %s\nUID: %s\nPlat: %s\n"
+                             "Hasil: %s\ngate.db#%d\n%s"
                              % (r["ts"], r["method"], r["direction"],
                                 r["uid"], r["plate"],
                                 "IZIN" if r["allowed"] else "TOLAK",
-                                r["id"]))
+                                r["id"],
+                                r.get("note") or ""))
 
 
 class GateSerialApp:
@@ -189,6 +472,7 @@ class GateSerialApp:
         self._app_start = time.monotonic()
 
         self.state = "CLOSED"
+        self._first_st = True
         self.pos = POS_CLOSED
         self.dist = -1
         self.vehicle_near = False
@@ -211,6 +495,8 @@ class GateSerialApp:
         self._prev_vehicle = False
         self._prev_row2 = None
         self._prev_masters = None
+        self._gate_authorized = False
+        self._snd = SoundEngine()
         self._syswin = None
         self._sys_text = None
         self._capwin = None
@@ -463,7 +749,8 @@ class GateSerialApp:
             b.grid(row=0, column=2 + i, sticky="ew", padx=3, pady=3)
             controls.grid_columnconfigure(2 + i, weight=1)
         buttons2 = [
-            ("Lihat Capture", self._toggle_capture_viewer, "TButton"),
+            ("Hasil Capture", self._toggle_capture_viewer, "TButton"),
+            ("Tiket", self._send_ticket, "Primary.TButton"),
             ("Tambah Master", self._send_addmode, "TButton"),
             ("Hapus Master", self._send_delmode, "TButton"),
             ("Daftar Master", self._send_list, "TButton"),
@@ -531,21 +818,14 @@ class GateSerialApp:
         pv = ttk.Frame(af)
         pv.grid(row=2, column=0, sticky="ew", padx=8, pady=(2, 6))
         pv.grid_columnconfigure(0, weight=1)
-        pv.grid_columnconfigure(1, weight=1)
-        pv1 = tk.Frame(pv, bg="#f6f7f9", highlightbackground=BORDER, highlightthickness=1)
-        pv1.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        pv2 = tk.Frame(pv, bg="#f6f7f9", highlightbackground=BORDER, highlightthickness=1)
-        pv2.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        pv1 = tk.Frame(pv, bg="#f6f7f9", highlightbackground=BORDER,
+                       highlightthickness=1)
+        pv1.grid(row=0, column=0, sticky="nsew")
         tk.Label(pv1, text="Kamera ANPR", bg="#f6f7f9", fg=MUTED,
-                 font=("DejaVu Sans", 9, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
-        tk.Label(pv2, text="Hasil Capture (terakhir)", bg="#f6f7f9", fg=MUTED,
                  font=("DejaVu Sans", 9, "bold")).pack(anchor="w", padx=6, pady=(4, 0))
         self.preview_lbl = tk.Label(pv1, text="Kamera mati / belum terbuka", fg=GRAY,
                                     bg="#f6f7f9", font=("DejaVu Sans", 10))
         self.preview_lbl.pack(padx=4, pady=4, expand=True)
-        self.preview_lbl2 = tk.Label(pv2, text="Belum ada capture", fg=GRAY,
-                                     bg="#f6f7f9", font=("DejaVu Sans", 10))
-        self.preview_lbl2.pack(padx=4, pady=4, expand=True)
 
     # ------------------------------------------------------------------ cam
     def _grab_worker(self, cam, attr_src_sync, attr_pil, attr_bgr=None, overlay=False):
@@ -593,7 +873,6 @@ class GateSerialApp:
             args=(cam, "_cam_source_sync", "_preview_pil", "_preview_bgr", True),
             daemon=True)
         self._gr_cam.start()
-        self._last_capture_pil = None
 
     def _draw_overlay(self, frame, boxes, banner):
         import cv2
@@ -746,15 +1025,9 @@ class GateSerialApp:
         return img
 
     def _show_capture(self, img_path):
-        """Tampilkan gambar capture terakhir ke panel kanan (thread-aman)."""
-        try:
-            path = ROOT / img_path if not os.path.isabs(img_path) else img_path
-            im = Image.open(path)
-            im.thumbnail((368, 276))
-            self._last_capture_pil = ImageTk.PhotoImage(im)
-            self.preview_lbl2.configure(image=self._last_capture_pil, text="")
-        except Exception as e:
-            self.preview_lbl2.configure(image="", text="Capture: %s" % e)
+        """Capture baru tersimpan → segarkan menu Hasil Capture bila sedang dibuka."""
+        if self._capwin is not None and self._capwin.winfo_exists():
+            self._capwin.refresh()
 
     # -------------------------------------------- validasi plat (RFID + ANPR)
     def _trigger_plate_validation(self):
@@ -883,6 +1156,20 @@ class GateSerialApp:
     def _send_clear(self):
         self._send("R"); self._log(">> hapus semua master", tag="warn")
 
+    def _send_ticket(self):
+        """Tombol TIKET di GUI — butuh kendaraan terdeteksi, buka gate via perintah 'H'."""
+        if not self.vehicle_near:
+            self._log("[tiket] TIDAK ADA KENDARAAN — tiket butuh sensor V:YES.",
+                      tag="err")
+            return
+        threading.Thread(target=self._capture,
+                         args=("tiket", "TIKET"),
+                         kwargs={"uid": "-", "allowed": True,
+                                 "note": "tombol tiket di GUI"},
+                         daemon=True).start()
+        self._send("H")
+        self._log("[tiket] Tombol Tiket ditekan — gerbang dibuka.", tag="ok")
+
     # ------------------------------------------------------------------ poll
     def _auto_connect(self):
         if self.ser and self.ser.is_open:
@@ -901,23 +1188,27 @@ class GateSerialApp:
             self._log("Tidak ada port serial tersedia.", tag="info")
 
     def _poll(self):
-        self._drain_log()
-        if self.ser and self.ser.is_open:
-            try:
-                data = self.ser.read(1024)
-                if data:
-                    self._buf += data
-                    while b"\n" in self._buf:
-                        line, self._buf = self._buf.split(b"\n", 1)
-                        self._on_line(line.decode(errors="replace").strip())
-            except (serial.SerialException, OSError):
-                self.ser = None
-                self._set_conn(False)
-                self._log("Koneksi serial terputus.", tag="warn")
-        self._cam_source_sync = self.anpr_source.get().strip()
-        self._update_preview()
-        self._drain_anpr_queue()
-        self._render_static()
+        try:
+            self._drain_log()
+            if self.ser and self.ser.is_open:
+                try:
+                    data = self.ser.read(1024)
+                    if data:
+                        self._buf += data
+                        while b"\n" in self._buf:
+                            line, self._buf = self._buf.split(b"\n", 1)
+                            self._on_line(line.decode(errors="replace").strip())
+                except (serial.SerialException, OSError):
+                    self.ser = None
+                    self._set_conn(False)
+                    self._log("Koneksi serial terputus.", tag="warn")
+            self._cam_source_sync = self.anpr_source.get().strip()
+            self._update_preview()
+            self._drain_anpr_queue()
+            self._render_static()
+        except Exception as e:
+            self._log("Error internal: %r" % e, tag="err")
+        # selalu jadwalkan ulang — kegagalan 1x tidak mematikan pembacaan serial
         self.root.after(50, self._poll)
 
     def _on_line(self, line):
@@ -969,15 +1260,53 @@ class GateSerialApp:
         self.rfid_last_uid = p[10]
         self.rfid_last_auth = p[11]
 
+        # Frame pertama = sinkronisasi baseline saja (tanpa log/suara) supaya
+        # GUI yang baru dibuka tidak tiba-tiba bersuara walau gate sedang terbuka
+        # atau sensor penuh noise.
+        if self._first_st:
+            self._first_st = False
+            self._prev_state = self.state
+            self._prev_vehicle = self.vehicle_near
+            self._prev_row2 = self.lcd_row2.strip()
+            self._prev_masters = self.master_uid
+            # tap kartu yang sudah terjadi SEBELUM GUI dibuka tidak usah diulang
+            self._rfid_last_uid_seen = self.rfid_last_uid
+            self._render()
+            return
+
         # ---- Log Sistem: catat PERUBAHAN status/grafis/sensor/master ----
+        # Suara: MURNI event -> pesan (sesuai instruksi, bukan state machine).
         if self.state != self._prev_state:
             self._log("[state] %s -> %s" % (self._prev_state, self.state),
                       tag="ok" if self.state in ("OPEN", "OPENING") else "info")
+            if self.state in ("OPEN", "OPENING"):
+                # gate terbuka SETELAH kartu sah -> 'silahkan masuk' (loop)
+                if (self._gate_authorized
+                        and self._snd.active_key() != "journey"):
+                    self._snd.play_loop("journey", gap=JOURNEY_GAP)
+                    self._log("[suara] silahkan masuk (loop sampai kendaraan lewat/tertutup)",
+                              tag="ok")
+            elif self.state == "CLOSED":
+                self._gate_authorized = False
+                self._snd.stop_loops()
+                self._log("[suara] gate tertutup — suara dihentikan", tag="info")
             self._prev_state = self.state
         if self.vehicle_near != self._prev_vehicle:
             self._log("[sensor] kendaraan %s (%d cm)" %
                       ("DETEKSI" if self.vehicle_near else "LOWONG", self.dist),
                       tag="ok" if self.vehicle_near else "info")
+            if self.vehicle_near:
+                # mobil menyentuh sensor approach -> 'selamat datang' (loop)
+                if (not self._gate_authorized
+                        and self._snd.active_key() != "greet"):
+                    self._snd.play_loop("greet", gap=GREET_GAP)
+                    self._log("[suara] selamat datang (loop)", tag="ok")
+            else:
+                # mobil keluar approach: prompt tunggu kartu (greet/retry)
+                # berhenti, tapi 'silahkan masuk' TETAP jalan sampai gate tertutup.
+                if not self._gate_authorized:
+                    self._snd.stop_loops()
+                    self._log("[suara] kendaraan keluar approach — prompt dihentikan", tag="info")
             self._prev_vehicle = self.vehicle_near
         r2 = self.lcd_row2.strip()
         msg_kw = ("NO VEHICLE", "TUNGGU", "ACCESS", "UNAUTHOR", "PASSED",
@@ -1004,6 +1333,21 @@ class GateSerialApp:
                              kwargs={"uid": self.rfid_last_uid,
                                      "allowed": allowed},
                              daemon=True).start()
+
+            # ---- Suara mengikut hasil (murni event) ----
+            # berhasil -> 'terima kasih' (loop); gate buka -> 'selamat jalan'
+            # gagal    -> 'silahkan coba lagi' (loop) selama masih ada kendaraan
+            if self.rfid_last_auth == 'G':
+                self._gate_authorized = True
+                self._snd.play_chain("thanks", "journey",
+                                     loop_gap=JOURNEY_GAP)
+                self._log("[suara] terima kasih (sekali) lalu 'silahkan masuk' (loop)",
+                          tag="ok")
+            elif self.rfid_last_auth == 'D':
+                if self.vehicle_near and not self._gate_authorized:
+                    self._snd.play_loop("retry", gap=RETRY_GAP)
+                    self._log("[suara] silahkan coba lagi (loop)",
+                              tag="warn")
 
         # ---- Kadar validasi plat: 'V' dari ESP32 → minta ANPR baca plat ----
         if self.rfid_last_auth == 'V':

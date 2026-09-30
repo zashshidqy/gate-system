@@ -1,0 +1,10 @@
+{
+  "name": "gate-dashboard",
+  "private": true,
+  "description": "Start backend + frontend together for local development",
+  "scripts": {
+    "dev": "bash ./dev.sh",
+    "dev:backend": "bash -lc 'cd backend && source .venv/bin/activate && alembic upgrade head && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000'",
+    "dev:frontend": "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173"
+  }
+}

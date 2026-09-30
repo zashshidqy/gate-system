@@ -1,0 +1,13 @@
+"""WebSocket event types"""
+from enum import Enum
+
+
+class GateEventType(str, Enum):
+    GATE_STATUS = "GATE_STATUS"
+    GATE_LOG = "GATE_LOG"
+    CARD_ADDED = "CARD_ADDED"
+    CARD_REMOVED = "CARD_REMOVED"
+    CARDS_CLEARED = "CARDS_CLEARED"
+    TICKET_VALIDATED = "TICKET_VALIDATED"
+    TICKET_CREATED = "TICKET_CREATED"
+    TICKET_REVOKED = "TICKET_REVOKED"

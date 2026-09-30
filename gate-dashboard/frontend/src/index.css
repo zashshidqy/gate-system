@@ -1,0 +1,268 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   NEOBRUTALISM DESIGN SYSTEM
+   Thick ink borders · hard offset shadows (zero blur) · flat vivid fills
+   Every colour is black-on-colour so text contrast stays far above WCAG AAA.
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* --- Ink: borders, shadows and body text are all the same ink --------- */
+    --ink: 24 14% 8%;                 /* #141414 */
+    --ink-rgb: 20 20 20;
+
+    /* --- Canvas ---------------------------------------------------------- */
+    --background: 42 33% 95%;         /* #F7F2E7 warm paper */
+    --foreground: var(--ink);
+    --card: 0 0% 100%;                /* #FFFFFF */
+    --card-foreground: var(--ink);
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--ink);
+
+    /* --- Brand: punchy yellow, always paired with ink text --------------- */
+    --primary: 48 100% 62%;           /* #FFD83D */
+    --primary-foreground: var(--ink);
+    --secondary: 210 100% 65%;         /* #4A7DFF */
+    --secondary-foreground: var(--ink);
+    --accent: 289 100% 74%;           /* #C08BFF */
+    --accent-foreground: var(--ink);
+
+    /* --- Surfaces -------------------------------------------------------- */
+    --muted: 42 22% 89%;              /* #EDE7DA */
+    --muted-foreground: 35 12% 32%;   /* #514B40 */
+
+    /* --- Semantic accents ------------------------------------------------ */
+    --success: 152 62% 56%;           /* #3DD68C */
+    --success-foreground: var(--ink);
+    --warning: 24 100% 60%;           /* #FF8A3D */
+    --warning-foreground: var(--ink);
+    --info: 187 78% 57%;              /* #3DD6E8 */
+    --info-foreground: var(--ink);
+    --destructive: 358 100% 67%;      /* #FF5A5F */
+    --destructive-foreground: var(--ink);
+
+    /* --- Hard shadow geometry -------------------------------------------- */
+    --nb-border: 2px;                 /* border thickness */
+    --nb-shadow-sm: 2px 2px 0 0 hsl(var(--ink));
+    --nb-shadow: 4px 4px 0 0 hsl(var(--ink));
+    --nb-shadow-lg: 6px 6px 0 0 hsl(var(--ink));
+
+    --border: var(--ink);
+    --input: var(--ink);
+    --ring: 358 100% 67%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Ink flips to warm white so borders/shadows stay visible on dark canvas */
+    --ink: 40 33% 95%;                /* #F5F0E3 */
+    --ink-rgb: 245 240 227;
+
+    --background: 30 8% 11%;          /* #1C1A18 */
+    --foreground: var(--ink);
+    --card: 28 8% 15%;                /* #272421 */
+    --card-foreground: var(--ink);
+    --popover: 28 8% 15%;
+    --popover-foreground: var(--ink);
+
+    --primary: 48 100% 62%;
+    --primary-foreground: 24 14% 8%;
+    --secondary: 210 100% 65%;
+    --secondary-foreground: 24 14% 8%;
+    --accent: 289 100% 74%;
+    --accent-foreground: 24 14% 8%;
+
+    --muted: 28 7% 20%;
+    --muted-foreground: 40 12% 74%;
+
+    --success: 152 62% 56%;
+    --success-foreground: 24 14% 8%;
+    --warning: 24 100% 60%;
+    --warning-foreground: 24 14% 8%;
+    --info: 187 78% 57%;
+    --info-foreground: 24 14% 8%;
+    --destructive: 358 100% 67%;
+    --destructive-foreground: 24 14% 8%;
+
+    --nb-shadow-sm: 2px 2px 0 0 hsl(var(--ink));
+    --nb-shadow: 4px 4px 0 0 hsl(var(--ink));
+    --nb-shadow-lg: 6px 6px 0 0 hsl(var(--ink));
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Neobrutalism leans on heavy geometric weights */
+    font-weight: 600;
+  }
+
+  /* Heavy display type for headings */
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+  }
+
+  button {
+    font-weight: 700;
+  }
+
+  /* Visible, chunky focus ring */
+  :focus-visible {
+    outline: 3px solid hsl(var(--foreground));
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* ---------------------------------------------------------------------
+     Neobrutalism primitives. Use these instead of ad-hoc shadow utilities.
+     --------------------------------------------------------------------- */
+
+  /* Hard offset shadow */
+  .nb-shadow {
+    box-shadow: var(--nb-shadow);
+  }
+  .nb-shadow-sm {
+    box-shadow: var(--nb-shadow-sm);
+  }
+  .nb-shadow-lg {
+    box-shadow: var(--nb-shadow-lg);
+  }
+  .nb-shadow-none {
+    box-shadow: none;
+  }
+
+  /* Interactive press: element slams down onto its own shadow */
+  .nb-press {
+    transition:
+      transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
+      box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+      background-color 120ms ease;
+  }
+  .nb-press:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: 5px 5px 0 0 hsl(var(--ink));
+  }
+  .nb-press:active:not(:disabled) {
+    transform: translate(4px, 4px);
+    box-shadow: 0 0 0 0 hsl(var(--ink));
+  }
+
+  /* Card: ink border + hard shadow, lifts on hover */
+  .nb-card {
+    border: var(--nb-border) solid hsl(var(--ink));
+    box-shadow: var(--nb-shadow);
+    background: hsl(var(--card));
+  }
+  .nb-card-hover {
+    transition:
+      transform 140ms cubic-bezier(0.4, 0, 0.2, 1),
+      box-shadow 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .nb-card-hover:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0 0 hsl(var(--ink));
+  }
+
+  /* Small caps label used above section content */
+  .nb-label {
+    font-size: 0.6875rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* Diagonal caution stripes for warning surfaces */
+  .nb-stripes {
+    background-image: repeating-linear-gradient(
+      45deg,
+      hsl(var(--ink) / 0.14) 0px,
+      hsl(var(--ink) / 0.14) 8px,
+      transparent 8px,
+      transparent 16px
+    );
+  }
+
+  /* Thick rule used to separate blocks */
+  .nb-divider {
+    border-top: var(--nb-border) solid hsl(var(--ink));
+  }
+
+  /*
+   * Native control chrome. The browser draws spinners on number inputs, a
+   * diagonal resize grip on textareas and a calendar glyph on date inputs —
+   * all in the OS's own greys, which breaks the flat ink-bordered look. The
+   * spinners and the resize grip go away entirely; the date glyph is kept but
+   * inked so it matches, and the calendar picker still opens on click.
+   */
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+  textarea {
+    resize: vertical;
+  }
+  textarea::-webkit-resizer {
+    display: none;
+  }
+  input[type='date']::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    filter: grayscale(1) contrast(2.2);
+    cursor: pointer;
+  }
+  input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    filter: grayscale(1) contrast(2.2);
+    cursor: pointer;
+  }
+  /* Native <select> popups can't be styled, so at least match the trigger. */
+  select {
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  /* Flat colour fills for the neobrutalist accent set */
+  .nb-yellow { background-color: hsl(48 100% 62%); }
+  .nb-blue { background-color: hsl(210 100% 65%); }
+  .nb-green { background-color: hsl(152 62% 56%); }
+  .nb-red { background-color: hsl(358 100% 67%); }
+  .nb-orange { background-color: hsl(24 100% 60%); }
+  .nb-purple { background-color: hsl(289 100% 74%); }
+  .nb-cyan { background-color: hsl(187 78% 57%); }
+  .nb-pink { background-color: hsl(330 100% 71%); }
+  .nb-white { background-color: hsl(0 0% 100%); }
+  .nb-ink { background-color: hsl(var(--ink)); }
+
+  .nb-text-yellow { color: hsl(48 100% 62%); }
+  .nb-text-blue { color: hsl(210 100% 65%); }
+  .nb-text-green { color: hsl(152 62% 56%); }
+  .nb-text-red { color: hsl(358 100% 67%); }
+  .nb-text-purple { color: hsl(289 100% 74%); }
+  .nb-text-cyan { color: hsl(187 78% 57%); }
+  .nb-text-pink { color: hsl(330 100% 71%); }
+  .nb-text-ink { color: hsl(var(--ink)); }
+}

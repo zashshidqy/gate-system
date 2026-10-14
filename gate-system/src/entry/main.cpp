@@ -5,7 +5,7 @@
 #include "RfidReader.h"
 #include "GateController.h"
 #include "StatusReport.h"
-#include "Buzzer.h"
+#include "DFPlayer.h"
 
 // ============================================================
 //  MAIN — UNIT ENTRY (gerbang masuk)
@@ -20,7 +20,7 @@
 GateController gate;
 RfidReader rfid;
 StatusReport ui;
-Buzzer buzzer;
+DFPlayer audio;
 
 unsigned long authUntilMs = 0;
 bool authResult = false;
@@ -156,7 +156,7 @@ void handleSerialCommands() {
       // Tombol TIKET (dari GUI) — alternatif akses: tetap wajib ada kendaraan.
       if (gate.isVehicleNear()) {
         Serial.println("> [tiket] Tombol Tiket — gerbang dibuka");
-        buzzer.greet();
+        audio.greet();
         gate.openGate();
       } else {
         Serial.println("> [tiket] TIDAK ADA KENDARAAN — tiket diabaikan");
@@ -196,7 +196,7 @@ void handleSerialCommands() {
         lastAuth = 'G';
         authUntilMs = millis() + RAUTH_DURATION_MS;
         Serial.println("> [anpr] PLAT TERVERIFIKASI — gerbang dibuka");
-        buzzer.greet();
+        audio.greet();
         gate.openGate();
       } else {
         Serial.println("> [anpr] 'G' diabaikan — tidak ada kartu menunggu validasi plat.");
@@ -211,7 +211,7 @@ void handleSerialCommands() {
         lastAuth = 'D';
         authUntilMs = millis() + RAUTH_DURATION_MS;
         Serial.println("> [anpr] PLAT TIDAK TERVERIFIKASI — akses ditolak");
-        buzzer.deny();
+        audio.deny();
       } else {
         Serial.println("> [anpr] 'N' diabaikan — tidak ada kartu menunggu validasi plat.");
       }
@@ -242,7 +242,7 @@ void setup() {
   }
   pinMode(BTN_OPEN, INPUT);
 
-  buzzer.begin();
+  audio.begin();
   rfid.begin();
 #if RFID_ENABLED
   rfid.printInitReport();
@@ -270,7 +270,7 @@ void loop() {
   static unsigned long rfidSkipUntil = 0;
 #endif
 
-  buzzer.update();
+  audio.update();
 
   // ---- sensor + log perubahan status (approach & pass) ----
   // Front & EXIT dibaca BERGANTIAN (tiap interval bergantian) agar kedua
@@ -416,7 +416,7 @@ void loop() {
                   authUntilMs = millis() + RAUTH_DURATION_MS;
                   authPending = false;
                   Serial.println("> [rfid] ACCEPTED — kendaraan terdeteksi, gerbang dibuka");
-                  buzzer.greet();
+                  audio.greet();
                   gate.openGate();
                 }
               } else {
@@ -433,7 +433,7 @@ void loop() {
               authUntilMs = millis() + RAUTH_DURATION_MS;
               authPending = false;
               Serial.println("> [rfid] DENIED — kartu tidak terotorisasi");
-              buzzer.deny();
+              audio.deny();
             }
           }
         } else {
@@ -461,7 +461,7 @@ void loop() {
         lastAuth = 'G';
         authUntilMs = millis() + RAUTH_DURATION_MS;
         Serial.println("> [rfid] KENDARAAN DETEKSI — kartu sah, gerbang dibuka");
-        buzzer.greet();
+        audio.greet();
         gate.openGate();
       }
     } else if (millis() >= pendingUntilMs) {
@@ -482,7 +482,7 @@ void loop() {
     lastAuth = 'D';
     authUntilMs = millis() + RAUTH_DURATION_MS;
     Serial.println("> [anpr] PLATE TIMEOUT — plat tidak terverifikasi, akses ditolak");
-    buzzer.deny();
+    audio.deny();
   }
 #endif
 

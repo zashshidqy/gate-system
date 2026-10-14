@@ -5,7 +5,7 @@
 #include "RfidReader.h"
 #include "GateController.h"
 #include "StatusReport.h"
-#include "Buzzer.h"
+#include "DFPlayer.h"
 
 // ============================================================
 //  MAIN — UNIT EXIT (gerbang keluar)
@@ -23,7 +23,7 @@
 GateController gate;
 RfidReader rfid;
 StatusReport ui;
-Buzzer buzzer;
+DFPlayer audio;
 
 unsigned long authUntilMs = 0;
 bool authResult = false;
@@ -96,7 +96,7 @@ void handleSerialCommands() {
     } else if (c == 'H') {
       // Tombol TIKET (dari GUI) — unit EXIT buka langsung tanpa syarat kendaraan.
       Serial.println("> [tiket] Tombol Tiket EXIT — gerbang dibuka");
-      buzzer.greet();
+      audio.greet();
       gate.openGate();
     } else if (c == 'S') {
       sensorDiag();
@@ -135,7 +135,7 @@ void setup() {
   }
   pinMode(BTN_OPEN, INPUT);
 
-  buzzer.begin();
+  audio.begin();
   rfid.begin();
 #if RFID_ENABLED
   rfid.printInitReport();
@@ -162,7 +162,7 @@ void loop() {
   static unsigned long rfidSkipUntil = 0;
 #endif
 
-  buzzer.update();
+  audio.update();
 
   // ---- sensor pass saja + log perubahan status ----
   if (millis() - lastDistMs >= DIST_INTERVAL_MS) {
@@ -258,7 +258,7 @@ void loop() {
               authUntilMs = millis() + RAUTH_DURATION_MS;
               authPending = false;
               Serial.println("> [rfid] ACCEPTED — gerbang exit dibuka");
-              buzzer.greet();
+              audio.greet();
               gate.openGate();
             } else {
               authResult = false;
@@ -266,7 +266,7 @@ void loop() {
               authUntilMs = millis() + RAUTH_DURATION_MS;
               authPending = false;
               Serial.println("> [rfid] DENIED — kartu tidak terotorisasi");
-              buzzer.deny();
+              audio.deny();
             }
           }
         } else {

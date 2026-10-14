@@ -11,7 +11,8 @@ import { StatCard, Meter } from '../components/ui/stat-card'
 import { useGates } from '../context/GateContext'
 import { useAuth } from '../context/AuthContext'
 import {
-  nb,
+  nbFill,
+  accents,
   badge,
   getMethodAccent,
   getMethodBadge,
@@ -226,7 +227,12 @@ export function Dashboard() {
         method,
         count,
         icon: METHOD_ICON[method] ?? Layers,
-        fill: nb[getMethodAccent(method)],
+        // `nbFill` (bare fill), not `nb` (fill + outline): the icon tile below
+        // already declares its own `border-2 border-ink`, and the Meter bar
+        // wants the fill on its own. One token, both uses — the old code
+        // recovered the bar colour by string-splitting `row.fill` and keeping
+        // the first word, which silently depends on `nb` staying two words.
+        fill: nbFill[getMethodAccent(method)],
         label: getMethodLabel(method),
       }))
       .sort((a, b) => b.count - a.count)
@@ -236,7 +242,7 @@ export function Dashboard() {
         type,
         count,
         label: getTicketLabel(type),
-        fill: nb[getTicketAccent(type)],
+        fill: nbFill[getTicketAccent(type)],
       }))
       .sort((a, b) => b.count - a.count)
 
@@ -296,7 +302,7 @@ export function Dashboard() {
           <div
             className={cn(
               'flex items-center gap-2 rounded-md border-2 border-ink px-3.5 py-2.5 shadow-nb-sm',
-              isConnected ? nb.green : nb.red,
+              isConnected ? nbFill[accents.success] : nbFill[accents.danger],
             )}
           >
             <span className="h-3 w-3 rounded-sm border-2 border-ink bg-ink" />
@@ -352,8 +358,10 @@ export function Dashboard() {
           role="alert"
           className="nb-stripes flex items-start gap-4 rounded-lg border-2 border-ink bg-nb-orange p-4 shadow-nb"
         >
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-card">
-            <WifiOff className="h-5 w-5" strokeWidth={3} aria-hidden="true" />
+          {/* Banner icon, not a list/KPI icon: `h-12` / `h-6`, the same
+              "state" pair as the gate state tile and the empty-state tile. */}
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-card">
+            <WifiOff className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
           </div>
           <div>
             <h3 className="nb-label">Koneksi kontrol terputus</h3>
@@ -366,6 +374,20 @@ export function Dashboard() {
       )}
 
       {/* ============================== KPI row ============================== */}
+      {/* L-11 (deliberate, do not "unify" this away): the dashboard has two card
+          archetypes and they are intentionally different.
+
+            1. StatCard (above) — headerless. The label is the smallest text on
+               the tile and the value dominates, which is what you want from a
+               number you scan, not read. It is the shared tile: Tickets.tsx
+               and RFID.tsx render the same component.
+            2. Card + coloured CardHeader (everything below) — titled, with a
+               tinted 2px-bordered band that separates the header from the
+               body. The title tells you what the block *is*; you have to read
+               it. It is used only on this page.
+
+          Folding one into the other would either strip the 8 section titles or
+          force 8 meaningless headers onto the KPI row, so they stay separate. */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard
           label="Total Pelintas"
@@ -373,7 +395,7 @@ export function Dashboard() {
           loading={isLoading}
           hint={`${derived.avgPerHour.toFixed(1)}/jam`}
           icon={Activity}
-          fill={nb.yellow}
+          fill={nbFill[accents.primary]}
         />
         <StatCard
           label="Diizinkan"
@@ -381,9 +403,9 @@ export function Dashboard() {
           loading={isLoading}
           hint={`${derived.successRate}% dari total`}
           icon={CheckCircle}
-          fill={nb.green}
+          fill={nbFill[accents.success]}
           meter={derived.successRate}
-          meterFill="bg-nb-green"
+          meterFill={nbFill[accents.success]}
         />
         <StatCard
           label="Ditolak"
@@ -391,9 +413,9 @@ export function Dashboard() {
           loading={isLoading}
           hint={`${derived.denialRate}% dari total`}
           icon={XCircle}
-          fill={nb.red}
+          fill={nbFill[accents.danger]}
           meter={derived.denialRate}
-          meterFill="bg-nb-red"
+          meterFill={nbFill[accents.danger]}
         />
         <StatCard
           label="Jam Tersibuk"
@@ -402,7 +424,7 @@ export function Dashboard() {
           isText
           hint={`${derived.peakCount} pelintas`}
           icon={Clock}
-          fill={nb.cyan}
+          fill={nbFill[accents.info]}
         />
         <StatCard
           label="Tiket Aktif"
@@ -410,7 +432,7 @@ export function Dashboard() {
           loading={isLoading}
           hint={`${derived.ticketTotal} terbit`}
           icon={Ticket}
-          fill={nb.pink}
+          fill={nbFill[accents.ticket]}
         />
         <StatCard
           label="Kartu RFID"
@@ -418,28 +440,41 @@ export function Dashboard() {
           loading={isLoading}
           hint="Terotorisasi"
           icon={CreditCard}
-          fill={nb.purple}
+          fill={nbFill[accents.rfid]}
         />
       </div>
 
       {/* ==================== Traffic chart + method breakdown ==================== */}
+      {/* All 8 CardHeader sites on this page use one shape (T1):
+            <CardHeader className="border-b-2 border-ink <fill>">
+              <div className="flex items-start justify-between gap-3">
+                <div><CardTitle/><CardDescription/></div>
+                <right slot (badge / chip) />
+              </div>
+            </CardHeader>
+          The title+description block is left-aligned against the body, the
+          right slot is `shrink-0`, and `items-start` keeps a two-line
+          description from vertically re-centring the title against a chip. No
+          site overrides CardHeader's own padding (T2) or its flex direction. */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card className="flex flex-col overflow-hidden xl:col-span-2">
-          <CardHeader className="flex-row items-start justify-between gap-4 border-b-2 border-ink bg-nb-yellow pb-4">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <BarChart3 className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-                Arus Pelintas
-              </CardTitle>
-              <CardDescription className="mt-1 text-ink/70">
-                Periode {activePeriodLabel} · puncak{' '}
-                <span className="font-extrabold text-ink">{derived.peakLabel}</span> (
-                {derived.peakCount} pelintas)
-              </CardDescription>
+          <CardHeader className="border-b-2 border-ink bg-nb-yellow">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                  Arus Pelintas
+                </CardTitle>
+                <CardDescription className="mt-1 text-ink/70">
+                  Periode {activePeriodLabel} · puncak{' '}
+                  <span className="font-extrabold text-ink">{derived.peakLabel}</span> (
+                  {derived.peakCount} pelintas)
+                </CardDescription>
+              </div>
+              <span className="hidden shrink-0 rounded-md border-2 border-ink bg-card px-2.5 py-1 text-xs font-extrabold uppercase text-ink sm:inline-block">
+                Per jam
+              </span>
             </div>
-            <span className="hidden rounded-md border-2 border-ink bg-card px-2.5 py-1 text-xs font-extrabold uppercase text-ink sm:inline-block">
-              Per jam
-            </span>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col pt-6">
             {isLoading ? (
@@ -461,15 +496,22 @@ export function Dashboard() {
         </Card>
 
         {/* Access methods */}
-        <Card className="overflow-hidden">
-          <CardHeader className="border-b-2 border-ink bg-nb-orange pb-4">
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-              Metode Akses
-            </CardTitle>
-            <CardDescription className="mt-1 text-ink/70">Persentase verifikasi</CardDescription>
+        <Card className="flex flex-col overflow-hidden">
+          {/* Purple = `accents.rfid`, the verification/credential accent, so this
+              band no longer collides with the yellow used for raw flow counts
+              (Arus Pelintas) — see the header-fill map in the report. */}
+          <CardHeader className="border-b-2 border-ink bg-nb-purple">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Zap className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                  Metode Akses
+                </CardTitle>
+                <CardDescription className="mt-1 text-ink/70">Persentase verifikasi</CardDescription>
+              </div>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-4 pt-6">
+          <CardContent className="flex flex-1 flex-col gap-4 pt-6">
             {isLoading ? (
               <div className="space-y-4">
                 {[...Array(4)].map((_, i) => (
@@ -488,11 +530,11 @@ export function Dashboard() {
                       <div className="flex items-center gap-2.5">
                         <span
                           className={cn(
-                            'flex h-9 w-9 shrink-0 items-center justify-center rounded border-2 border-ink text-ink',
+                            'flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-ink text-ink',
                             row.fill,
                           )}
                         >
-                          <Icon className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
+                          <Icon className="h-5 w-5" strokeWidth={3} aria-hidden="true" />
                         </span>
                         <p className="text-sm font-extrabold uppercase leading-none">
                           {row.label}
@@ -505,7 +547,7 @@ export function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    <Meter value={share} fillClass={row.fill.split(' ')[0]} />
+                    <Meter value={share} fillClass={row.fill} />
                   </div>
                 )
               })
@@ -538,11 +580,15 @@ export function Dashboard() {
         <div className="grid auto-rows-fr grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-1">
           {/* Direction */}
           <Card className="flex flex-col overflow-hidden">
-            <CardHeader className="border-b-2 border-ink bg-nb-blue pb-4">
-              <CardTitle className="flex items-center gap-2">
-                <Truck className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-                Arah Pelintas
-              </CardTitle>
+            <CardHeader className="border-b-2 border-ink bg-nb-blue">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Truck className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                    Arah Pelintas
+                  </CardTitle>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="flex flex-1 flex-col gap-4 pt-6">
               {isLoading ? (
@@ -564,14 +610,14 @@ export function Dashboard() {
                       <div className="flex w-full items-center gap-3">
                         <span
                           className={cn(
-                            'flex h-9 w-9 shrink-0 items-center justify-center rounded border-2 border-ink text-ink',
-                            isEntry ? nb.blue : nb.green,
+                            'flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-ink text-ink',
+                            isEntry ? nbFill.blue : nbFill.green,
                           )}
                         >
                           {isEntry ? (
-                            <LogIn className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
+                            <LogIn className="h-5 w-5" strokeWidth={3} aria-hidden="true" />
                           ) : (
-                            <LogOut className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
+                            <LogOut className="h-5 w-5" strokeWidth={3} aria-hidden="true" />
                           )}
                         </span>
                         <div className="min-w-0 flex-1">
@@ -586,7 +632,7 @@ export function Dashboard() {
                           </div>
                           <Meter
                             value={share}
-                            fillClass={isEntry ? 'bg-nb-blue' : 'bg-nb-green'}
+                            fillClass={isEntry ? nbFill.blue : nbFill.green}
                           />
                         </div>
                       </div>
@@ -599,13 +645,17 @@ export function Dashboard() {
 
           {/* Ticket types */}
           <Card className="flex flex-col overflow-hidden">
-            <CardHeader className="border-b-2 border-ink bg-nb-pink pb-4">
-              <CardTitle className="flex items-center gap-2">
-                <Ticket className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-                Tiket / Jenis
-              </CardTitle>
+            <CardHeader className="border-b-2 border-ink bg-nb-pink">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Ticket className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                    Tiket / Jenis
+                  </CardTitle>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent className="flex-1 space-y-3 pt-6">
+            <CardContent className="flex flex-1 flex-col gap-3 pt-6">
               {isLoading ? (
                 <Skeleton className="h-24 w-full" />
               ) : derived.ticketRows.length === 0 ? (
@@ -624,7 +674,7 @@ export function Dashboard() {
                           </span>
                         </span>
                       </div>
-                      <Meter value={share} fillClass={row.fill.split(' ')[0]} />
+                      <Meter value={share} fillClass={row.fill} />
                     </div>
                   )
                 })
@@ -638,12 +688,19 @@ export function Dashboard() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Expiring soon */}
         <Card className="flex flex-col overflow-hidden">
-          <CardHeader className="border-b-2 border-ink bg-nb-yellow pb-4">
-            <CardTitle className="flex items-center gap-2">
-              <Hourglass className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-              Segera Kedaluwarsa
-            </CardTitle>
-            <CardDescription className="mt-1 text-ink/70">Dalam 7 hari ke depan</CardDescription>
+          {/* Orange = `accents.warning`, matching the `X hari` badges on the rows
+              below. This band used to be yellow, the same fill as "Arus
+              Pelintas", so two unrelated cards read as one colour group. */}
+          <CardHeader className="border-b-2 border-ink bg-nb-orange">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Hourglass className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                  Segera Kedaluwarsa
+                </CardTitle>
+                <CardDescription className="mt-1 text-ink/70">Dalam 7 hari ke depan</CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-1 flex-col pt-6">
             {!expiringTickets || expiringTickets.length === 0 ? (
@@ -652,7 +709,7 @@ export function Dashboard() {
                 title="Semua aman"
                 message="Tidak ada tiket yang akan kedaluwarsa dalam 7 hari."
                 compact
-                fill={nb.green}
+                fill={nbFill[accents.success]}
               />
             ) : (
               /* flex-1 on each row makes the list grow to fill the card, so a
@@ -663,15 +720,15 @@ export function Dashboard() {
                   return (
                     <li
                       key={t.id}
-                      className="flex flex-1 items-center gap-3 rounded-md border-2 border-ink bg-card p-2.5"
+                      className="flex flex-1 items-center gap-3 rounded-md border-2 border-ink bg-card p-3"
                     >
                       <span
                         className={cn(
-                          'flex h-9 w-9 shrink-0 items-center justify-center rounded border-2 border-ink text-ink',
-                          left <= 1 ? nb.red : nb.yellow,
+                          'flex h-11 w-11 shrink-0 items-center justify-center rounded-md border-2 border-ink text-ink',
+                          left <= 1 ? nbFill[accents.danger] : nbFill[accents.warning],
                         )}
                       >
-                        <Hourglass className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
+                        <Hourglass className="h-5 w-5" strokeWidth={3} aria-hidden="true" />
                       </span>
                       <div className="min-w-0 flex-1 leading-tight">
                         <p className="truncate font-mono text-sm font-extrabold">{t.code}</p>
@@ -680,7 +737,10 @@ export function Dashboard() {
                         </p>
                       </div>
                       <Badge
-                        className={cn('shrink-0', left <= 1 ? nb.red : nb.orange)}
+                        className={cn(
+                          'shrink-0',
+                          left <= 1 ? nbFill[accents.danger] : nbFill[accents.warning],
+                        )}
                       >
                         {left <= 0 ? 'Hari ini' : `${left} hari`}
                       </Badge>
@@ -699,22 +759,27 @@ export function Dashboard() {
 
         {/* Recent passages */}
         <Card className="flex flex-col overflow-hidden xl:col-span-2">
-          <CardHeader className="flex-row items-center justify-between gap-4 border-b-2 border-ink bg-nb-cyan pb-4">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
-                Aktivitas Terakhir
-              </CardTitle>
-              <CardDescription className="mt-1 text-ink/70">
-                {stats?.recent_passages.length ?? 0} kejadian terbaru
-              </CardDescription>
+          <CardHeader className="border-b-2 border-ink bg-nb-cyan">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
+                  Aktivitas Terakhir
+                </CardTitle>
+                <CardDescription className="mt-1 text-ink/70">
+                  {stats?.recent_passages.length ?? 0} kejadian terbaru
+                </CardDescription>
+              </div>
+              <Badge className={cn('shrink-0 gap-1', nbFill[accents.success])}>
+                <Signal className="h-3 w-3" strokeWidth={3} aria-hidden="true" />
+                Real-time
+              </Badge>
             </div>
-            <Badge className={cn('shrink-0 gap-1', nb.green)}>
-              <Signal className="h-3 w-3" strokeWidth={3} aria-hidden="true" />
-              Real-time
-            </Badge>
           </CardHeader>
-          <CardContent className="p-0">
+          {/* `p-0` is deliberate — the table has to run flush to the card edge.
+              The flex column is what lets the empty state below centre itself in
+              the slack when this card is stretched by its grid siblings. */}
+          <CardContent className="flex flex-1 flex-col p-0">
             {isLoading ? (
               <div className="space-y-3 p-6">
                 {[...Array(5)].map((_, i) => (
@@ -820,7 +885,7 @@ function GateStatusCard({
 
   return (
     <Card className="flex flex-col overflow-hidden">
-      <CardHeader className={cn('border-b-2 border-ink pb-4', tone.fill)}>
+      <CardHeader className={cn('border-b-2 border-ink', tone.fill)}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle>{title}</CardTitle>
@@ -828,8 +893,8 @@ function GateStatusCard({
           </div>
           <span
             className={cn(
-              'flex shrink-0 items-center gap-2 rounded border-2 border-ink px-2 py-1',
-              status.connected ? nb.green : nb.red,
+              'flex shrink-0 items-center gap-2 rounded-md border-2 border-ink px-2 py-1',
+              status.connected ? nbFill[accents.success] : nbFill[accents.danger],
             )}
           >
             <span className="h-2.5 w-2.5 rounded-sm border-2 border-ink bg-ink" />
@@ -840,14 +905,18 @@ function GateStatusCard({
         </div>
       </CardHeader>
 
-      <CardContent className="flex flex-1 flex-col gap-4 pt-5">
-        {/* State + position */}
+      {/* Opens its body at 6, like the other seven CardContents here (the local
+          override replaces CardContent's own zero top padding). This one used
+          to sit a notch tighter than all of its siblings. */}
+      <CardContent className="flex flex-1 flex-col gap-4 pt-6">
+        {/* State + position — the one emphasised block in the card, so it keeps
+            the larger `p-4`; the rows below it all use the standard `p-3`. */}
         <div className="rounded-md border-2 border-ink bg-card p-4">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <span
                 className={cn(
-                  'flex h-12 w-12 shrink-0 items-center justify-center rounded border-2 border-ink text-ink',
+                  'flex h-12 w-12 shrink-0 items-center justify-center rounded-md border-2 border-ink text-ink',
                   tone.iconFill,
                 )}
               >
@@ -862,7 +931,7 @@ function GateStatusCard({
                 <p className="mt-1.5 text-xl font-extrabold uppercase">{state}</p>
               </div>
             </div>
-            {isMoving && <Badge className={nb.blue}>Bergerak</Badge>}
+            {isMoving && <Badge className={nbFill[accents.info]}>Bergerak</Badge>}
           </div>
 
           <div className="mt-4">
@@ -872,7 +941,7 @@ function GateStatusCard({
             </div>
             <Meter
               value={pct(pos, 90)}
-              fillClass={isOpen ? 'bg-nb-green' : 'bg-nb-yellow'}
+              fillClass={isOpen ? nbFill[accents.success] : nbFill[accents.primary]}
               className="mt-2"
             />
             <div className="mt-1.5 flex justify-between text-[10px] font-bold uppercase text-muted-foreground">
@@ -885,8 +954,8 @@ function GateStatusCard({
         {/* Vehicle */}
         <div
           className={cn(
-            'flex items-center gap-2.5 rounded-md border-2 border-ink px-3 py-2.5',
-            vehicle ? nb.orange : 'bg-muted',
+            'flex items-center gap-2.5 rounded-md border-2 border-ink p-3',
+            vehicle ? nbFill[accents.warning] : 'bg-muted',
           )}
         >
           <span className="h-3 w-3 shrink-0 rounded-sm border-2 border-ink bg-ink" />
@@ -897,13 +966,13 @@ function GateStatusCard({
 
         {/* LCD */}
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-md border-2 border-ink bg-ink p-2.5">
+          <div className="rounded-md border-2 border-ink bg-ink p-3">
             <p className="nb-label text-background/60">LCD 1</p>
             <p className="mt-1.5 truncate font-mono text-xs font-bold text-background" title={lcd1}>
               {lcd1 || '—'}
             </p>
           </div>
-          <div className="rounded-md border-2 border-ink bg-ink p-2.5">
+          <div className="rounded-md border-2 border-ink bg-ink p-3">
             <p className="nb-label text-background/60">LCD 2</p>
             <p className="mt-1.5 truncate font-mono text-xs font-bold text-background" title={lcd2}>
               {lcd2 || '—'}
@@ -911,17 +980,21 @@ function GateStatusCard({
           </div>
         </div>
 
-        {/* Device info */}
+        {/* Device info — the 3-up metric chips get their own `px-2.5 py-2`
+            instead of the row `p-3`: they sit in a 3-column grid that goes down
+            to ~90px wide on mobile, where 12px of side padding would squeeze
+            the labels. They had no horizontal padding at all before, so a long
+            UID ran straight into the 2px border. */}
         <div className="grid grid-cols-3 gap-2 border-t-2 border-ink pt-4 text-center">
-          <div className="rounded border-2 border-ink bg-muted py-2">
+          <div className="rounded-md border-2 border-ink bg-muted px-2.5 py-2">
             <p className="nb-label text-muted-foreground">Total</p>
             <p className="mt-1 text-sm font-extrabold tabular-nums">{count ?? '—'}</p>
           </div>
-          <div className="rounded border-2 border-ink bg-muted py-2">
+          <div className="rounded-md border-2 border-ink bg-muted px-2.5 py-2">
             <p className="nb-label text-muted-foreground">UID</p>
             <p className="mt-1 truncate font-mono text-xs font-extrabold">{lastUid || '—'}</p>
           </div>
-          <div className="rounded border-2 border-ink bg-muted py-2">
+          <div className="rounded-md border-2 border-ink bg-muted px-2.5 py-2">
             <p className="nb-label text-muted-foreground">RFID</p>
             <p className="mt-1 truncate font-mono text-xs font-extrabold">{rfidVer || '—'}</p>
           </div>
@@ -960,17 +1033,35 @@ function GateStatusCard({
   )
 }
 
+/**
+ * Gate state -> accent. The gate header is one of the eight on this page, and
+ * unlike the six section headers its band encodes live state, so it stays
+ * dynamic. The values are bare fills (`nbFill`) because both consumers — the
+ * CardHeader band and the state icon tile — declare their own `border-2
+ * border-ink`.
+ */
 function gateTone(state: string): { fill: string; iconFill: string } {
   switch (state) {
     case 'OPEN':
-      return { fill: nb.green, iconFill: nb.green }
+      return { fill: nbFill[accents.success], iconFill: nbFill[accents.success] }
     case 'CLOSED':
-      return { fill: nb.yellow, iconFill: nb.yellow }
+      return { fill: nbFill[accents.primary], iconFill: nbFill[accents.primary] }
     default:
-      return { fill: nb.orange, iconFill: nb.orange }
+      return { fill: nbFill[accents.warning], iconFill: nbFill[accents.warning] }
   }
 }
 
+/**
+ * Shared empty state for the six data-driven cards.
+ *
+ * `flex-1` is load-bearing: every one of those cards is a flex column whose
+ * height is set by its grid siblings, so without growing, the empty state kept
+ * its intrinsic height and stuck to the top of the body. Combined with
+ * CardContent's `pt-0` (the body has no top padding, only `pb-6`) that put
+ * ~24px above the icon and ~48px below the caption — visibly off-centre, and
+ * worse the taller the sibling next to it. Growing plus `justify-center`
+ * centres it in whatever space the card actually has.
+ */
 function EmptyState({
   icon: Icon,
   title,
@@ -985,15 +1076,23 @@ function EmptyState({
   fill?: string
 }) {
   return (
-    <div className={cn('flex flex-col items-center justify-center text-center', compact ? 'py-6' : 'py-12')}>
+    <div
+      className={cn(
+        'flex flex-1 flex-col items-center justify-center text-center',
+        compact ? 'py-6' : 'py-12',
+      )}
+    >
       <span
         className={cn(
-          'mb-4 flex items-center justify-center rounded-lg border-2 border-ink text-ink shadow-nb-sm',
-          compact ? 'h-14 w-14' : 'h-16 w-16',
+          // `compact` used to drive the icon size too (h-14 vs h-16), which is
+          // what let five different tile sizes coexist on the page. The tile is
+          // now one size — the same `h-12` / `h-6` pair as the gate state icon
+          // — and `compact` only shortens the vertical padding.
+          'mb-4 flex h-12 w-12 items-center justify-center rounded-md border-2 border-ink text-ink shadow-nb-sm',
           fill ?? 'bg-muted',
         )}
       >
-        <Icon className={compact ? 'h-7 w-7' : 'h-8 w-8'} strokeWidth={3} aria-hidden="true" />
+        <Icon className="h-6 w-6" strokeWidth={3} aria-hidden="true" />
       </span>
       <p className="text-sm font-extrabold uppercase">{title}</p>
       <p className="mt-2 max-w-xs text-xs font-semibold text-muted-foreground">{message}</p>

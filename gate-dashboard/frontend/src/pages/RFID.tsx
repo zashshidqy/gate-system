@@ -45,6 +45,7 @@ export function RFID() {
   const [showForm, setShowForm] = useState<AuthorizedCard | 'create' | null>(null)
   const [formData, setFormData] = useState<CardFormData>({ uid: '', label: '', note: '' })
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [tapMode, setTapMode] = useState<null | { unit: string; expiresAt: number }>(null)
   const { data, isLoading } = useQuery({
     queryKey: ['rfid-cards', page, debouncedSearch, activeFilter],
     queryFn: async () => {
@@ -107,6 +108,48 @@ export function RFID() {
     },
     onError: () => toast.error('Gagal menyinkronkan'),
   })
+  const tapRegisterMutation = useMutation({
+    mutationFn: (unit: string) => api.post(`/rfid/register-tap/${unit}`),
+    onSuccess: (response: any, unit: string) => {
+      toast.success(response.data?.message || 'Add-master mode activated', { icon: '📡' })
+      setTapMode({ unit: unit.toUpperCase(), expiresAt: Date.now() + 15000 })
+    },
+    onError: (error: any) => {
+      const message = error.response?.data?.detail || 'Gagal mengaktifkan mode tap'
+      toast.error(message)
+    },
+  })
+
+  // Listen for card-tapped events from GateContext
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.uid) {
+        setFormData((prev) => ({ ...prev, uid: detail.uid }))
+        setShowForm('create')
+        setTapMode(null)
+        toast.success(`Kartu terdeteksi: ${detail.uid}`, { icon: '✅' })
+      }
+    }
+    window.addEventListener('card-tapped', handler)
+    return () => window.removeEventListener('card-tapped', handler)
+  }, [])
+
+  // Countdown timer for tap mode
+  const [tapCountdown, setTapCountdown] = useState(0)
+  React.useEffect(() => {
+    if (!tapMode) return
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((tapMode.expiresAt - Date.now()) / 1000))
+      setTapCountdown(remaining)
+      if (remaining <= 0) {
+        setTapMode(null)
+        setTapCountdown(0)
+        toast.error('Waktu tap habis', { icon: '⏰' })
+      }
+    }, 200)
+    return () => clearInterval(interval)
+  }, [tapMode])
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.uid.trim()) {
@@ -139,14 +182,53 @@ export function RFID() {
           <h1 className="text-4xl font-extrabold uppercase tracking-tight sm:text-5xl">Kartu RFID</h1>
           <p className="mt-2 text-sm font-semibold text-muted-foreground">Kelola kartu RFID resmi untuk akses gerbang</p>
         </div>
-        <Button
-          onClick={() => { setShowForm('create'); setFormData({ uid: '', label: '', note: '' }) }}
-          className="gap-2 bg-nb-purple text-ink"
-        >
-          <Plus className="h-5 w-5" />
-          Tambah Kartu
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => tapRegisterMutation.mutate('ENTRY')}
+            disabled={tapRegisterMutation.isPending || !!tapMode}
+            className="gap-2"
+          >
+            <IdCard className="h-5 w-5" />
+            Tap ENTRY
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => tapRegisterMutation.mutate('EXIT')}
+            disabled={tapRegisterMutation.isPending || !!tapMode}
+            className="gap-2"
+          >
+            <IdCard className="h-5 w-5" />
+            Tap EXIT
+          </Button>
+          <Button
+            onClick={() => { setShowForm('create'); setFormData({ uid: '', label: '', note: '' }) }}
+            className="gap-2 bg-nb-purple text-ink"
+          >
+            <Plus className="h-5 w-5" />
+            Tambah Kartu
+          </Button>
+        </div>
       </div>
+      {/* Tap Mode Banner */}
+      {tapMode && (
+        <div className="flex items-center gap-3 rounded-md border-2 border-ink bg-nb-yellow px-5 py-4 shadow-nb-md">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md border-2 border-ink bg-card">
+            <IdCard className="h-5 w-5 text-ink" />
+          </div>
+          <div className="flex-1">
+            <p className="font-extrabold uppercase tracking-tight">
+              Mode Aktif: Tap Kartu di {tapMode.unit}
+            </p>
+            <p className="text-sm font-semibold text-muted-foreground">
+              Tempel kartu RFID pada reader {tapMode.unit} sekarang — {tapCountdown}s tersisa
+            </p>
+          </div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-md border-2 border-ink bg-card font-mono text-lg font-extrabold">
+            {tapCountdown}
+          </div>
+        </div>
+      )}
       {/* Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard

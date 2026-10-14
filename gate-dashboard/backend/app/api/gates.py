@@ -1,17 +1,16 @@
 """Gate control and status API"""
+import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.orm import Session
 from typing import Optional
-import logging
 
 from ..database import get_db
-from ..models.ticket import TicketToken
-from ..schemas.gate import GateCommand, UnitStatus
+from ..schemas.gate import UnitStatus
 from ..schemas.common import MessageResponse
-from ..schemas.ticket import QRCodeResponse, TicketTokenResponse
 from ..services.serial_bridge import SerialBridge
 from ..services.qr_generator import QRGenerator
-from ..services.protocol import build_command
+from ..services.protocol import GateCommand, build_command
 from ..websocket.manager import ws_manager
 from ..dependencies import get_current_active_user, require_admin
 from ..config import get_settings
@@ -21,6 +20,11 @@ router = APIRouter(prefix="/gates", tags=["Gates"])
 
 # Serial bridge instance (initialized in main.py)
 serial_bridge: Optional[SerialBridge] = None
+
+# Commands that drive the servo directly. They are valid protocol bytes but
+# must never be reachable from the staff API, so they are rejected explicitly
+# rather than being silently remapped onto master-card management.
+SERVO_TEST_COMMANDS = frozenset({GateCommand.TEST_CLOSED, GateCommand.TEST_OPEN})
 
 
 def get_serial_bridge() -> SerialBridge:
@@ -33,25 +37,29 @@ def get_serial_bridge() -> SerialBridge:
 async def get_gate_status(bridge: SerialBridge = Depends(get_serial_bridge)):
     """Get current status of both gates."""
     try:
-        return {
-            "ENTRY": {
-                "connected": "ENTRY" in bridge.readers,
-                "status": bridge.readers.get("ENTRY").status if "ENTRY" in bridge.readers else None
-            },
-            "EXIT": {
-                "connected": "EXIT" in bridge.readers,
-                "status": bridge.readers.get("EXIT").status if "EXIT" in bridge.readers else None
-            },
-        }
-    except Exception as e:
-        logger.error(f"Error getting gate status: {e}")
+        def snapshot(unit: str) -> dict:
+            reader = bridge.readers.get(unit)
+            return {
+                "connected": bridge.is_connected(unit),
+                "status": reader.status if reader is not None else None,
+            }
+
+        return {"ENTRY": snapshot("ENTRY"), "EXIT": snapshot("EXIT")}
+    except Exception:
+        logger.exception("Error getting gate status")
         raise HTTPException(status_code=500, detail="Failed to get gate status")
 
 
 @router.post("/command", response_model=MessageResponse)
 async def send_gate_command(
     unit: str = Query(..., description="Gate unit: ENTRY or EXIT"),
-    command: str = Query(..., description="Command: O (open), C (close), A (alert), Q (query)"),
+    command: str = Query(
+        ...,
+        description=(
+            "Command byte: O (open), C (close), A (add master card), "
+            "Q (delete master card), L (list master cards), R (reset all cards)"
+        ),
+    ),
     bridge: SerialBridge = Depends(get_serial_bridge),
     current_user=Depends(get_current_active_user),
 ):
@@ -60,34 +68,37 @@ async def send_gate_command(
         unit_upper = unit.upper()
         if unit_upper not in ("ENTRY", "EXIT"):
             raise HTTPException(status_code=400, detail="Invalid unit. Use ENTRY or EXIT")
-        
-        if unit_upper not in bridge.readers:
+
+        if not bridge.is_connected(unit_upper):
             raise HTTPException(status_code=503, detail=f"{unit_upper} gate not connected")
 
-        # Map command string to GateCommand enum
-        command_map = {
-            "O": GateCommand.OPEN,
-            "C": GateCommand.CLOSE,
-            "A": GateCommand.ALERT,
-            "Q": GateCommand.QUERY,
-            "L": GateCommand.LOCK,
-            "R": GateCommand.RESET,
-            "X": GateCommand.ADD_MASTER,
-            "Z": GateCommand.DEL_MASTER,
-        }
-        
-        gate_cmd = command_map.get(command.upper())
-        if not gate_cmd:
-            raise HTTPException(status_code=400, detail=f"Invalid command: {command}")
+        # The enum's value *is* the wire byte, so the command string maps onto
+        # it directly. A dict of GateCommand members would break the moment the
+        # enum is edited, and any unknown byte is a client error, not a 500.
+        try:
+            gate_cmd = GateCommand(command.upper())
+        except ValueError:
+            # The ValueError is an implementation detail; the client only needs
+            # to know which bytes are valid.
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid command: {command}. Use one of O, C, A, Q, L, R",
+            ) from None
+
+        if gate_cmd in SERVO_TEST_COMMANDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Command {command} drives the servo directly and is not available via the API",
+            )
 
         await bridge.send_command(unit_upper, build_command(gate_cmd))
         logger.info(f"Command {command} sent to {unit_upper} by {current_user.username}")
         return MessageResponse(message=f"Command {command} sent to {unit_upper}")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error sending command: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to send command: {str(e)}")
+    except Exception:
+        logger.exception("Error sending command")
+        raise HTTPException(status_code=500, detail="Failed to send command")
 
 
 @router.post("/entry/open", response_model=MessageResponse)
@@ -97,15 +108,15 @@ async def open_entry(
 ):
     """Open the ENTRY gate."""
     try:
-        if "ENTRY" not in bridge.readers:
+        if not bridge.is_connected("ENTRY"):
             raise HTTPException(status_code=503, detail="ENTRY gate not connected")
         await bridge.send_command("ENTRY", build_command(GateCommand.OPEN))
         logger.info(f"Open command sent to ENTRY by {current_user.username}")
         return MessageResponse(message="Open command sent to ENTRY")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error opening ENTRY gate: {e}")
+    except Exception:
+        logger.exception("Error opening ENTRY gate")
         raise HTTPException(status_code=500, detail="Failed to open gate")
 
 
@@ -116,15 +127,15 @@ async def close_entry(
 ):
     """Close the ENTRY gate."""
     try:
-        if "ENTRY" not in bridge.readers:
+        if not bridge.is_connected("ENTRY"):
             raise HTTPException(status_code=503, detail="ENTRY gate not connected")
         await bridge.send_command("ENTRY", build_command(GateCommand.CLOSE))
         logger.info(f"Close command sent to ENTRY by {current_user.username}")
         return MessageResponse(message="Close command sent to ENTRY")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error closing ENTRY gate: {e}")
+    except Exception:
+        logger.exception("Error closing ENTRY gate")
         raise HTTPException(status_code=500, detail="Failed to close gate")
 
 
@@ -135,15 +146,15 @@ async def open_exit(
 ):
     """Open the EXIT gate."""
     try:
-        if "EXIT" not in bridge.readers:
+        if not bridge.is_connected("EXIT"):
             raise HTTPException(status_code=503, detail="EXIT gate not connected")
         await bridge.send_command("EXIT", build_command(GateCommand.OPEN))
         logger.info(f"Open command sent to EXIT by {current_user.username}")
         return MessageResponse(message="Open command sent to EXIT")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error opening EXIT gate: {e}")
+    except Exception:
+        logger.exception("Error opening EXIT gate")
         raise HTTPException(status_code=500, detail="Failed to open gate")
 
 
@@ -154,15 +165,15 @@ async def close_exit(
 ):
     """Close the EXIT gate."""
     try:
-        if "EXIT" not in bridge.readers:
+        if not bridge.is_connected("EXIT"):
             raise HTTPException(status_code=503, detail="EXIT gate not connected")
         await bridge.send_command("EXIT", build_command(GateCommand.CLOSE))
         logger.info(f"Close command sent to EXIT by {current_user.username}")
         return MessageResponse(message="Close command sent to EXIT")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error closing EXIT gate: {e}")
+    except Exception:
+        logger.exception("Error closing EXIT gate")
         raise HTTPException(status_code=500, detail="Failed to close gate")
 
 
@@ -178,7 +189,7 @@ async def add_master_card(
         unit_upper = unit.upper()
         if unit_upper not in ("ENTRY", "EXIT"):
             raise HTTPException(status_code=400, detail="Invalid unit")
-        if unit_upper not in bridge.readers:
+        if not bridge.is_connected(unit_upper):
             raise HTTPException(status_code=503, detail=f"{unit_upper} not connected")
         
         await bridge.send_command(unit_upper, build_command(GateCommand.ADD_MASTER))
@@ -186,8 +197,8 @@ async def add_master_card(
         return MessageResponse(message=f"Add-master mode activated on {unit_upper} for 15 seconds")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error in add-master: {e}")
+    except Exception:
+        logger.exception("Error in add-master")
         raise HTTPException(status_code=500, detail="Failed to activate add-master mode")
 
 
@@ -202,7 +213,7 @@ async def del_master_card(
         unit_upper = unit.upper()
         if unit_upper not in ("ENTRY", "EXIT"):
             raise HTTPException(status_code=400, detail="Invalid unit")
-        if unit_upper not in bridge.readers:
+        if not bridge.is_connected(unit_upper):
             raise HTTPException(status_code=503, detail=f"{unit_upper} not connected")
         
         await bridge.send_command(unit_upper, build_command(GateCommand.DEL_MASTER))
@@ -210,8 +221,8 @@ async def del_master_card(
         return MessageResponse(message=f"Delete-master mode activated on {unit_upper} for 15 seconds")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error in del-master: {e}")
+    except Exception:
+        logger.exception("Error in del-master")
         raise HTTPException(status_code=500, detail="Failed to activate delete-master mode")
 
 
@@ -226,7 +237,7 @@ async def list_masters(
         unit_upper = unit.upper()
         if unit_upper not in ("ENTRY", "EXIT"):
             raise HTTPException(status_code=400, detail="Invalid unit")
-        if unit_upper not in bridge.readers:
+        if not bridge.is_connected(unit_upper):
             raise HTTPException(status_code=503, detail=f"{unit_upper} not connected")
         
         await bridge.send_command(unit_upper, build_command(GateCommand.LIST_MASTER))
@@ -234,8 +245,8 @@ async def list_masters(
         return MessageResponse(message=f"Master list requested from {unit_upper}")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error requesting master list: {e}")
+    except Exception:
+        logger.exception("Error requesting master list")
         raise HTTPException(status_code=500, detail="Failed to request master list")
 
 
@@ -250,7 +261,7 @@ async def reset_all_masters(
         unit_upper = unit.upper()
         if unit_upper not in ("ENTRY", "EXIT"):
             raise HTTPException(status_code=400, detail="Invalid unit")
-        if unit_upper not in bridge.readers:
+        if not bridge.is_connected(unit_upper):
             raise HTTPException(status_code=503, detail=f"{unit_upper} not connected")
         
         await bridge.send_command(unit_upper, build_command(GateCommand.RESET_ALL))
@@ -258,8 +269,8 @@ async def reset_all_masters(
         return MessageResponse(message=f"All master cards cleared on {unit_upper}")
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error resetting masters: {e}")
+    except Exception:
+        logger.exception("Error resetting masters")
         raise HTTPException(status_code=500, detail="Failed to reset master cards")
 
 
@@ -287,9 +298,6 @@ async def gate_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         await ws_manager.disconnect(websocket, client_id)
         logger.info(f"Gate WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+    except Exception:
+        logger.exception("WebSocket error")
         await ws_manager.disconnect(websocket, client_id)
-
-
-import asyncio

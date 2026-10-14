@@ -79,6 +79,19 @@ class TicketUsage(Base):
     allowed = Column(Boolean, nullable=False)
     method = Column(SQLEnum(ValidationMethod), nullable=False)
     note = Column(Text, nullable=True)
+    
+    # Sensor data captured at validation time
+    sensor_data_json = Column(Text, nullable=True)  # JSON snapshot of gate sensors
+    
+    @property
+    def parsed_sensor_data(self):
+        """Parse sensor_data_json as dict."""
+        if self.sensor_data_json:
+            try:
+                return json.loads(self.sensor_data_json)
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     token = relationship("TicketToken", back_populates="usages")
 

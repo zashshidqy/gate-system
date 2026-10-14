@@ -218,8 +218,35 @@ async def get_hardware_master_list(
     if unit_upper not in ("ENTRY", "EXIT"):
         raise HTTPException(status_code=400, detail="Invalid unit. Use ENTRY or EXIT")
 
-    from ..services.protocol import build_command
-    from ..schemas.gate import GateCommand
+    from ..services.protocol import build_command, GateCommand
 
     await bridge.send_command(unit_upper, build_command(GateCommand.LIST_MASTER))
     return MessageResponse(message=f"Master list requested from {unit_upper}. Check logs for response.")
+
+
+@router.post("/register-tap/{unit}", response_model=MessageResponse)
+async def register_card_by_tap(
+    unit: str,
+    bridge: SerialBridge = Depends(get_serial_bridge),
+    current_user=Depends(get_current_active_user),
+):
+    """
+    Enter RFID add-master mode on the specified unit.
+
+    The ESP32 will listen for a card tap for 15 seconds. When a card is tapped,
+    the backend detects it via serial and broadcasts a CARD_TAPPED WebSocket event
+    with the tapped card's UID.
+    """
+    unit_upper = unit.upper()
+    if unit_upper not in ("ENTRY", "EXIT"):
+        raise HTTPException(status_code=400, detail="Invalid unit. Use ENTRY or EXIT")
+
+    if not bridge.is_connected(unit_upper):
+        raise HTTPException(status_code=503, detail=f"{unit_upper} not connected")
+
+    from ..services.protocol import build_command, GateCommand
+
+    await bridge.send_command(unit_upper, build_command(GateCommand.ADD_MASTER))
+    return MessageResponse(
+        message=f"Add-master mode activated on {unit_upper} for 15 seconds. Tap a card now."
+    )

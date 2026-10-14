@@ -15,7 +15,7 @@ Per unit:
 | HC-SR04 approach (kendaraan menunggu) | ✅ | ❌ — tidak dipasang |
 | HC-SR04 pass (kendaraan sudah lewat) | ✅ | ✅ |
 | RFID RC522 | ✅ | ✅ (tap untuk buka) |
-| **Active buzzer** (greeting/deny) | ✅ | ✅ |
+| **DFPlayer Mini** (greeting/deny MP3) | ✅ | ✅ |
 
 > **Unit Exit** selalu **standby** dalam keadaan tertutup: buka hanya lewat tap RFID (atau button),
 > tidak ada syarat "kendaraan dekat". Sensor pass dipakai untuk mendeteksi kendaraan lewat → tutup
@@ -40,6 +40,8 @@ Per unit:
 | RFID MOSI | GPIO 17 | SPI | Perintah ke reader |
 | RFID SS | GPIO 25 | SPI | Chip select / SDA |
 | RFID RST | GPIO 27 | Output | Reset reader |
+| DFPlayer Mini RX | GPIO 19 | Input | ESP32 RX <- DFPlayer TX (Serial2 remap) |
+| DFPlayer Mini TX | GPIO 21 | Output | ESP32 TX -> DFPlayer RX (Serial2 remap) |
 
 > **Catatan:** LCD 16x2 I2C (GPIO 21/22) dan Button TUTUP (GPIO 5) sudah **dihapus** dari firmware.
 > GPIO 21/22/5 kini bebas. Sensor pass sengaja dipasang di **GPIO 32/33** (pojok header, jauh dari
@@ -59,6 +61,8 @@ Per unit:
 | RFID SS | GPIO 25 | SPI | Chip select / SDA |
 | RFID RST | GPIO 27 | Output | Reset reader |
 | GPIO 13 / 14 | — | — | **Tidak dipasang** (tanpa sensor approach) |
+| DFPlayer Mini RX | GPIO 19 | Input | ESP32 RX <- DFPlayer TX (Serial2 remap) |
+| DFPlayer Mini TX | GPIO 21 | Output | ESP32 TX -> DFPlayer RX (Serial2 remap) |
 
 ### Power / Ground
 | Jalur | Tujuan |
@@ -158,22 +162,42 @@ IRQ            → (tidak dipakai, abaikan)
 ```
 > **Catatan pin:** susunan pin modul biasanya `SDA – SCK – MOSI – MISO – IRQ – GND – RST – VCC`.
 
+### DFPlayer Mini (greeting/deny MP3) — Entry & Exit
+> **PENTING:** DFPlayer disupply **5V** (bukan 3.3V — amp onboard butuh 5V untuk output maksimal).
+> `DFPLAYER_ENABLED 1` di `src/entry/config.h` / `src/exit/config.h`
+> Serial2 di-remap ke GPIO 19 (RX) / 21 (TX).
+> Speaker 8Ω 3W langsung ke SPK+/SPK- DFPlayer **tanpa amplifier eksternal**.
+```
+DFPlayer Mini    ESP32
+VCC             → 5V
+GND             → GND
+TX (module)     → GPIO 19 (ESP32 RX, Serial2)
+RX (module)     → GPIO 21 (ESP32 TX, Serial2)
+SPK+            → Speaker 8Ω (+)
+SPK-            → Speaker 8Ω (-)
+BUSY            → (tidak disambung, opsional)
+```
+> **Catatan:** File MP3 diletakkan di microSD card dalam folder `mp3/` dengan nama `0001.mp3` (greet) dan `0002.mp3` (deny).
+> Jika microSD tidak ada / tidak terbaca → firmware boot normal, audio tidak bunyi (expected, bukan bug).
+
 ---
 
 ## Pin yang TELAH DIPAKAI (Avoid)
 ```
-GPIO 2   → Buzzer (active, LEDC ch 7) — sekaligus LED biru onboard DOIT
+GPIO 2   → (tersedia) LED biru onboard DOIT — dahulu buzzer, sekarang bebas
 GPIO 4   → Button Buka
 GPIO 13  → HC-SR04 #1 TRIG (approach)
 GPIO 14  → HC-SR04 #1 ECHO (approach)
-GPIO 18  → Servo
-GPIO 32  → HC-SR04 #2 TRIG (pass)
-GPIO 33  → HC-SR04 #2 ECHO (pass)
 GPIO 15  → RFID SCK
 GPIO 16  → RFID MISO
 GPIO 17  → RFID MOSI
+GPIO 18  → Servo
+GPIO 19  → DFPlayer Mini RX (Serial2 remap)
+GPIO 21  → DFPlayer Mini TX (Serial2 remap)
 GPIO 25  → RFID SS
 GPIO 27  → RFID RST
+GPIO 32  → HC-SR04 #2 TRIG (pass)
+GPIO 33  → HC-SR04 #2 ECHO (pass)
 GPIO 1   → TX (USB-Serial, dipakai upload)
 GPIO 3   → RX (USB-Serial, dipakai upload)
 ```
@@ -188,7 +212,7 @@ GPIO 3   → RX (USB-Serial, dipakai upload)
 
 ### Pin AMAN untuk ekspansi berikutnya
 ```
-GPIO 5, 19, 21, 22, 26
+GPIO 5, 22, 26
 ```
 
 ---
@@ -232,6 +256,7 @@ GPIO 5, 19, 21, 22, 26
 ## Log Update
 | Tanggal | Perubahan |
 |---------|-----------|
+| (hari ini) | **DFPlayer Mini menggantikan Buzzer** — GPIO 19/21 (Serial2 remap), speaker 8Ω 3W langsung ke SPK+/-, microSD `mp3/0001.mp3` & `0002.mp3`, non-blocking, boot normal tanpa SD |
 | (hari ini) | **Unit Exit ringkas** — hanya 1 HC-SR04 (pass); tanpa approach; buka via tap RFID/button; selalu standby tertutup |
 | (hari ini) | **Arsitektur 2 unit ESP32** (Entry + Exit) — Unit Entry full, Unit Exit ringkas; RFID dinyalakan (`RFID_ENABLED 1`) |
 | (hari ini) | **Tambah HC-SR04 #2 (exit)** — TRIG=GPIO32, ECHO=GPIO33: deteksi kendaraan sudah lewat → tutup lebih cepat |

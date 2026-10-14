@@ -15,6 +15,7 @@ from .api import (
     passages_router,
     dashboard_router,
     users_router,
+    printer_router,
 )
 from .services.serial_bridge import SerialBridge
 from .websocket.manager import ws_manager
@@ -112,6 +113,7 @@ app.include_router(rfid_router)
 app.include_router(passages_router)
 app.include_router(dashboard_router)
 app.include_router(users_router)
+app.include_router(printer_router)
 
 
 @app.get("/health")
@@ -119,8 +121,8 @@ async def health_check():
     return {
         "status": "ok",
         "serial_connected": {
-            "ENTRY": "ENTRY" in serial_bridge.readers if serial_bridge else False,
-            "EXIT": "EXIT" in serial_bridge.readers if serial_bridge else False,
+            unit: serial_bridge.is_connected(unit) if serial_bridge else False
+            for unit in ("ENTRY", "EXIT")
         },
     }
 

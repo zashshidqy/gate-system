@@ -1,4 +1,4 @@
-from .gate import GateStatus, GateCommand, GateEvent, UnitStatus
+from .gate import GateStatus, GateEvent, UnitStatus
 from .ticket import (
     TicketTokenCreate,
     TicketTokenUpdate,
@@ -16,7 +16,6 @@ from .common import PaginatedResponse, MessageResponse
 
 __all__ = [
     "GateStatus",
-    "GateCommand",
     "GateEvent",
     "UnitStatus",
     "TicketTokenCreate",

@@ -22,6 +22,7 @@ from ..schemas.ticket import (
 from ..schemas.common import MessageResponse, PaginatedResponse
 from ..services.ticket_engine import TicketEngine
 from ..services.qr_generator import QRGenerator
+from ..services.sensor_provider import SensorDataProvider
 from ..dependencies import get_current_active_user, require_admin
 from ..models.user import UserRole
 
@@ -271,8 +272,23 @@ def validate_ticket(
     current_user=Depends(get_current_active_user),
 ):
     """Validate a ticket token for entry/exit."""
+    # Get sensor data from gate if available
+    sensor_data = None
+    try:
+        from ..api.gates import serial_bridge
+        if serial_bridge:
+            sensor_provider = SensorDataProvider(serial_bridge)
+            sensor_data = sensor_provider.get_sensor_data(request.gate)
+    except Exception as e:
+        logger.warning(f"Failed to get sensor data: {e}")
+    
     engine = TicketEngine(db)
-    result = engine.validate(request.token_code, request.gate, ValidationMethod(request.method))
+    result = engine.validate(
+        request.token_code, 
+        request.gate, 
+        ValidationMethod(request.method),
+        sensor_data=sensor_data
+    )
 
     return TicketValidationResponse(
         allowed=result.allowed,
@@ -290,8 +306,18 @@ def validate_ticket_manual(
     current_user=Depends(get_current_active_user),
 ):
     """Manual validation by guard (override)."""
+    # Get sensor data from gate if available
+    sensor_data = None
+    try:
+        from ..api.gates import serial_bridge
+        if serial_bridge:
+            sensor_provider = SensorDataProvider(serial_bridge)
+            sensor_data = sensor_provider.get_sensor_data(gate)
+    except Exception as e:
+        logger.warning(f"Failed to get sensor data: {e}")
+    
     engine = TicketEngine(db)
-    result = engine.validate_manual(token_code, gate)
+    result = engine.validate_manual(token_code, gate, sensor_data=sensor_data)
 
     return TicketValidationResponse(
         allowed=result.allowed,

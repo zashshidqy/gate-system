@@ -142,6 +142,12 @@ export function GateProvider({ children }: { children: ReactNode }) {
       } else if (event.unit === 'EXIT') {
         setExitStatus(unitStatus)
       }
+    } else if (event.type === 'CARD_TAPPED') {
+      // Dispatch a custom DOM event so pages (e.g. RFID) can listen for card taps
+      const cardEvent = new CustomEvent('card-tapped', {
+        detail: { uid: event.payload?.uid, unit: event.unit },
+      })
+      window.dispatchEvent(cardEvent)
     } else if (event.type === 'ERROR') {
       console.error('[GateContext] Gate error:', event.payload)
       toast.error(`Galat gerbang: ${event.payload?.message || 'Kesalahan tidak diketahui'}`, { position: 'bottom-right' })

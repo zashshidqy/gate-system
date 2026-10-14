@@ -1,18 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Literal
-from enum import Enum
 from pydantic import BaseModel, Field, ConfigDict
-
-
-class GateCommand(str, Enum):
-    OPEN = "O"
-    CLOSE = "C"
-    ADD_MASTER = "A"
-    DEL_MASTER = "Q"
-    LIST_MASTER = "L"
-    RESET_ALL = "R"
-    TEST_CLOSED = "X"
-    TEST_OPEN = "Z"
 
 
 class GateStatus(BaseModel):
@@ -30,17 +18,6 @@ class GateStatus(BaseModel):
     last_uid: Optional[str] = None
     last_auth: Optional[str] = None
     count: int
-
-
-class GateCommand(str, Enum):
-    OPEN = "O"
-    CLOSE = "C"
-    ADD_MASTER = "A"
-    DEL_MASTER = "Q"
-    LIST_MASTER = "L"
-    RESET_ALL = "R"
-    TEST_CLOSED = "X"
-    TEST_OPEN = "Z"
 
 
 class UnitStatus(BaseModel):

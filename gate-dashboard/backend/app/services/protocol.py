@@ -2,7 +2,24 @@
 from typing import Optional, List
 from dataclasses import dataclass
 from enum import Enum
-from app.schemas.gate import GateCommand
+
+
+class GateCommand(str, Enum):
+    """Command bytes understood by the ESP32 firmware.
+
+    The enum *value* is the literal byte written to the serial port, so
+    ``build_command`` is just ``value.encode("ascii")``. This lives here
+    rather than in ``schemas`` because it is protocol, not an API payload.
+    """
+
+    OPEN = "O"
+    CLOSE = "C"
+    ADD_MASTER = "A"
+    DEL_MASTER = "Q"
+    LIST_MASTER = "L"
+    RESET_ALL = "R"
+    TEST_CLOSED = "X"
+    TEST_OPEN = "Z"
 
 
 @dataclass

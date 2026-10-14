@@ -72,6 +72,7 @@ class TicketUsageResponse(BaseModel):
     allowed: bool
     method: str
     note: Optional[str] = None
+    parsed_sensor_data: Optional[dict[str, Any]] = None
 
 
 class QRCodeResponse(BaseModel):

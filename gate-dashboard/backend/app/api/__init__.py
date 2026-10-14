@@ -5,6 +5,7 @@ from .rfid import router as rfid_router
 from .passages import router as passages_router
 from .dashboard import router as dashboard_router
 from .users import router as users_router
+from .printer import router as printer_router
 
 __all__ = [
     "auth_router",
@@ -14,4 +15,5 @@ __all__ = [
     "passages_router",
     "dashboard_router",
     "users_router",
+    "printer_router",
 ]

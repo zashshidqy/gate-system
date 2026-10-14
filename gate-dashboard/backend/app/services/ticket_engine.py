@@ -1,8 +1,9 @@
 """Ticket validation engine"""
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 import uuid
+import json
 
 from ..models.ticket import TicketToken, TicketUsage, TicketType, ValidationMethod
 from ..schemas.ticket import TicketValidationResponse, TicketTokenResponse
@@ -25,14 +26,16 @@ class ValidationResult:
 class TicketEngine:
     """Handles ticket validation logic."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, sensor_data_provider=None):
         self.db = db
+        self.sensor_data_provider = sensor_data_provider
 
     def validate(
         self,
         token_code: str,
         gate: str,
         method: ValidationMethod,
+        sensor_data: Optional[Dict[str, Any]] = None,
     ) -> ValidationResult:
         """Validate a ticket token for entry/exit."""
         now = datetime.utcnow()
@@ -67,6 +70,10 @@ class TicketEngine:
             if not entry_usage:
                 return ValidationResult(allowed=False, reason="NO_ENTRY_RECORD")
 
+        # Get sensor data from gate if not provided
+        if sensor_data is None and self.sensor_data_provider:
+            sensor_data = self.sensor_data_provider.get_sensor_data(gate)
+        
         # Record usage
         direction = "IN" if gate == "ENTRY" else "OUT"
         usage_id = uuid.uuid4()
@@ -78,6 +85,7 @@ class TicketEngine:
             timestamp=now,
             allowed=True,
             method=method,
+            sensor_data_json=json.dumps(sensor_data) if sensor_data else None,
         )
 
         token.used_count += 1
@@ -91,9 +99,9 @@ class TicketEngine:
             usage_id=usage_id,
         )
 
-    def validate_manual(self, token_code: str, gate: str) -> ValidationResult:
+    def validate_manual(self, token_code: str, gate: str, sensor_data: Optional[Dict[str, Any]] = None) -> ValidationResult:
         """Manual validation (override) - used by guards."""
-        return self.validate(token_code, gate, ValidationMethod.MANUAL)
+        return self.validate(token_code, gate, ValidationMethod.MANUAL, sensor_data)
 
     def get_token(self, token_code: str) -> Optional[TicketToken]:
         return self.db.query(TicketToken).filter(TicketToken.code == token_code).first()

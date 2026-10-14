@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>frame</title>
+<style>
+  html,body{margin:0;padding:0;background:#6b7280;font:12px/1.4 monospace;color:#fff}
+  .lbl{padding:3px 8px;background:#111}
+  iframe{border:0;display:block;margin:0 auto;background:#fff}
+  /* Cross-origin image that resolves only after the app has had time to boot.
+     It is display:none but still fetched, so it holds the load event. */
+  img{display:none}
+</style>
+</head><body>
+<div class="lbl" id="lbl"></div>
+<img id="hold" alt="">
+<script>
+  var q = new URLSearchParams(location.search);
+  localStorage.setItem('access_token', q.get('t') || '');
+  var w = parseInt(q.get('w') || '375', 10);
+  var h = parseInt(q.get('h') || '2400', 10);
+  document.getElementById('lbl').textContent = 'viewport ' + w + 'x' + h;
+  var f = document.createElement('iframe');
+  f.width = w; f.height = h; f.src = q.get('p') || '/';
+  document.body.appendChild(f);
+  document.getElementById('hold').src =
+    'http://127.0.0.1:8099/slow.png?t=' + (q.get('d') || '9000');
+</script>
+</body></html>

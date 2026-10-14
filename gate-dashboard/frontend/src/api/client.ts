@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosError } from 'axios'
 import toast from 'react-hot-toast'
+import type { PrinterStatus, PrinterTestResponse, GateTicketTestRequest, ExitScanRequest, ExitScanResponse } from '../types'
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api'
 const API_DOWN_MESSAGE = 'Cannot reach API at http://127.0.0.1:8000. Start the backend.'
@@ -160,8 +161,36 @@ class ApiClient {
   clearRetries() {
     this.retryCount.clear()
   }
+
+  // Printer API
+  async getPrinterStatus(): Promise<PrinterStatus> {
+    const response = await this.client.get<PrinterStatus>('/printer/status')
+    return response.data
+  }
+
+  async testPrint(): Promise<PrinterTestResponse> {
+    const response = await this.client.post<PrinterTestResponse>('/printer/test')
+    return response.data
+  }
+
+  async testGateTicket(req: GateTicketTestRequest): Promise<PrinterTestResponse> {
+    const response = await this.client.post<PrinterTestResponse>('/printer/test/gate-ticket', req)
+    return response.data
+  }
+
+  async testExitScan(req: ExitScanRequest): Promise<ExitScanResponse> {
+    const response = await this.client.post<ExitScanResponse>('/printer/test/exit-scan', req)
+    return response.data
+  }
 }
 
 const client = new ApiClient()
 export const apiClient = client
 export const api = client.instance
+
+export const printerApi = {
+  getStatus: () => api.get<PrinterStatus>('/printer/status'),
+  testPrint: () => api.post<PrinterTestResponse>('/printer/test'),
+  testGateTicket: (req: GateTicketTestRequest) => api.post<PrinterTestResponse>('/printer/test/gate-ticket', req),
+  testExitScan: (req: ExitScanRequest) => api.post<ExitScanResponse>('/printer/test/exit-scan', req),
+}

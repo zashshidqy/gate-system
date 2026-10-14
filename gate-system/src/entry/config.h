@@ -74,8 +74,10 @@
 #define POS_CLOSED 120
 #define POS_OPEN 30
 
-// ---- Buzzer (greeting sound) ----
-// Buzzer pasif di GPIO2 (pada board DOIT DevKit, LED biru onboard juga di
-// GPIO2 — LED ikut berkedip saat berbunyi). Set -1 untuk menonaktifkan.
-#define BUZZER_PIN 2
-#define BUZZER_LEDC_CH 7   // kanal LEDC terpisah dari servo
+// ---- DFPlayer Mini (menggantikan buzzer) ----
+#define DFPLAYER_ENABLED 1
+#define DFPLAYER_RX_PIN 19    // ESP32 RX <- DFPlayer TX (Serial2 remap)
+#define DFPLAYER_TX_PIN 21    // ESP32 TX -> DFPlayer RX (Serial2 remap)
+#define DFPLAYER_VOLUME 20    // 0-30, 20 aman & cukup keras untuk 8Ω 3W
+#define DFPLAYER_GREET_TRACK 1  // mp3/0001.mp3
+#define DFPLAYER_DENY_TRACK 2   // mp3/0002.mp3

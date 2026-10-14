@@ -133,3 +133,64 @@ export interface PassageFilter {
   page: number
   page_size: number
 }
+
+export interface PrinterStatus {
+  connected: boolean
+  name: string
+  driver: string
+  uri: string
+  usb_detected: boolean
+  cups_status: string
+}
+
+export interface PrinterTestResponse {
+  success: boolean
+  message: string
+  request_id?: string
+}
+
+export interface GateTicketTestRequest {
+  direction: 'ENTRY' | 'EXIT'
+  ticket_type: 'SINGLE_ENTRY' | 'MULTI_DAY' | 'VIP' | 'STAFF'
+  ticket_code: string
+  plate?: string
+  rfid_uid?: string
+  method: 'QR_SCAN' | 'RFID_LINK' | 'MANUAL' | 'ANPR'
+  gate_name: string
+  operator: string
+  company_name: string
+  company_website: string
+  show_qr: boolean
+  // Exit-specific fields
+  entry_time?: string
+  exit_time?: string
+  duration_hours?: number
+  duration_text?: string
+  parking_fee?: number
+  payment_method?: 'CASH' | 'QRIS' | 'CARD' | 'E_WALLET'
+}
+
+export interface ExitScanRequest {
+  ticket_code: string
+  plate?: string
+  rfid_uid?: string
+  ticket_type: string
+  entry_time?: string
+  gate_name: string
+}
+
+export interface ExitScanResponse {
+  ticket_code: string
+  ticket_type: string
+  plate?: string
+  rfid_uid?: string
+  entry_time?: string
+  exit_time: string
+  duration_hours: number
+  duration_text: string
+  parking_fee: number
+  payment_method: string
+  gate_name: string
+  company_name: string
+  message: string
+}
